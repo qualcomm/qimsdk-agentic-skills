@@ -1,0 +1,4 @@
+{
+    "input-file-path": "/etc/media/video.mp4",
+    "model": "/etc/models/quicksrnetsmall_quantized.tflite"
+}

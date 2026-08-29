@@ -1,0 +1,7 @@
+{
+  "confidence": 60.0,
+  "databases": [
+    { "id": 0, "database": "/etc/data/face0.bin" },
+    { "id": 1, "database": "/etc/data/face1.bin" }
+  ]
+}

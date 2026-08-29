@@ -1,47 +1,93 @@
-**After repository creation:**
-- [ ] Update this `README.md`. Update the Project Name, description, and all sections. Remove this checklist.
-- [ ] If required, update `LICENSE.txt` and the License section with your project's approved license
-- [ ] Search this repo for "REPLACE-ME" and update all instances accordingly
-- [ ] Update `CONTRIBUTING.md` as needed
-- [ ] Review the workflows in `.github/workflows`, updating as needed. See https://docs.github.com/en/actions for information on what these files do and how they work.
-- [ ] Review and update the suggested Issue and PR templates as needed in `.github/ISSUE_TEMPLATE` and `.github/PULL_REQUEST_TEMPLATE`
+# qimsdk-agentic-skills
 
-# Project Name
+Agentic skills for QIMSDK development workflows.
 
-*\<update with your project name and a short description\>*
+This repository packages QIMSDK-focused skills for coding agents. The repo keeps
+runtime skill payloads, sample prompts, and skill metadata in separate top-level
+areas.
 
-Project that does ... implemented in ... runs on Qualcomm® *\<processor\>*
+## Purpose
 
-## Branches
+Use this repo to maintain skills for:
 
-**main**: Primary development branch. Contributors should develop submissions based on this branch, and submit pull requests to this branch.
+- QIMSDK GStreamer application generation.
+- QIMSDK C++ application generation.
+- QIMSDK Python application generation.
+- QIMSDK deployment workflows.
 
-## Requirements
+The skill payloads live directly under `skills/`.
 
-List requirements to run the project, how to install them, instructions to use docker container, etc...
+## Directory Structure
 
-## Installation Instructions
+```text
+.
+├── AGENTS.md
+├── README.md
+├── skills/
+│   ├── qimsdk-gstreamer-app-builder/
+│   ├── qimsdk-python-app-builder/
+│   ├── qimsdk-cpp-app-builder/
+│   └── qimsdk-deploy/
+├── skills-metadata/
+└── sample-prompts/
+    ├── qimsdk-gstreamer-app-builder/
+    ├── qimsdk-cpp-app-builder/
+    └── qimsdk-python-app-builder/
+```
 
-How to install the software itself.
+## Skill Layout
 
-## Usage
+Each implemented skill should have:
 
-Describe how to use the project.
+```text
+skills/<skill-name>/
+├── SKILL.md
+└── references/        # optional runtime references
+```
 
-## Development
+Skill names should match their directory names. For example:
 
-How to develop new features/fixes for the software. Maybe different than "usage". Also provide details on how to contribute via a [CONTRIBUTING.md file](CONTRIBUTING.md).
+```yaml
+---
+name: qimsdk-gstreamer-app-builder
+description: ...
+---
+```
 
-## Getting in Contact
+Current skills:
 
-How to contact maintainers. E.g. GitHub Issues, GitHub Discussions could be indicated for many cases. However a mail list or list of Maintainer e-mails could be shared for other types of discussions. E.g.
+- `qimsdk-gstreamer-app-builder`
+- `qimsdk-cpp-app-builder`
+- `qimsdk-python-app-builder`
+- `qimsdk-deploy`
 
-* [Report an Issue on GitHub](../../issues)
-* [Open a Discussion on GitHub](../../discussions)
-* [E-mail us](mailto:REPLACE-ME@qti.qualcomm.com) for general questions
+## Skills Metadata
+
+Skill metadata lives under `skills-metadata/`.
+
+This directory contains metadata files for describing skill identity,
+classification, required inputs, known gaps, and source references. It is
+separate from runtime skill payloads under `skills/`.
+
+Skill authors adding or changing skills should create or update the matching
+metadata file in `skills-metadata/`.
+
+## Sample Prompts
+
+Sample prompts live under `sample-prompts/`.
+
+The currently populated prompt sets are:
+
+- `qimsdk-gstreamer-app-builder/`: `gst-launch` and C app prompts.
+- `qimsdk-cpp-app-builder/`: C++ app-builder prompts.
+- `qimsdk-python-app-builder/`: Python app-builder prompts.
+
+## Contributing
+
+Read `AGENTS.md` before making structural changes. It defines the repository
+layout and rules for adding skills, prompts, and metadata.
 
 ## License
 
-*\<update with your project name and license\>*
-
-*\<REPLACE-ME\>* is licensed under the [BSD-3-clause License](https://spdx.org/licenses/BSD-3-Clause.html). See [LICENSE.txt](LICENSE.txt) for the full license text.
+qimsdk-agentic-skills is licensed under the BSD-3-clause License. See
+`LICENSE.txt` for the full license text.

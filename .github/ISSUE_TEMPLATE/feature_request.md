@@ -1,20 +1,26 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest a new skill, prompt, metadata update, or workflow improvement
 title: ''
-labels: ''
+labels: enhancement
 assignees: ''
-
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**Affected area**
+- Skill:
+- Sample prompt:
+- Metadata file:
+- Other:
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**Problem**
+Describe the gap or workflow this request should address.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**Proposed change**
+Describe the skill, prompt, metadata, or documentation change you want.
+
+**Alternatives considered**
+Describe any alternate approaches or existing skills that are close but
+insufficient.
 
 **Additional context**
-Add any other context or screenshots about the feature request here.
+Add examples, expected prompts, expected output shape, or related references.

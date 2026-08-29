@@ -1,38 +1,33 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a problem with a QIMSDK agentic skill, prompt, or metadata record
 title: ''
-labels: ''
+labels: bug
 assignees: ''
-
 ---
 
+**Affected area**
+- Skill:
+- Sample prompt:
+- Metadata file:
+- Other:
+
 **Describe the bug**
-A clear and concise description of what the bug is.
+A clear description of the incorrect behavior.
 
 **To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+Steps, prompt text, command, or artifact that reproduces the issue.
 
 **Expected behavior**
-A clear and concise description of what you expected to happen.
+What the skill, prompt, or metadata should produce or describe.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Actual behavior**
+What happened instead.
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
-
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**Environment**
+- Agent or tool:
+- QIMSDK release or platform, if relevant:
+- Host OS, if relevant:
 
 **Additional context**
-Add any other context about the problem here.
+Add logs, generated artifacts, screenshots, or related links.

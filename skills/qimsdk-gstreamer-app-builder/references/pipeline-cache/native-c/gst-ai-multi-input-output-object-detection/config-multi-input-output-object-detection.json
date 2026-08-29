@@ -1,0 +1,14 @@
+{
+    "input-file-path":
+        [
+            "/etc/media/video1.mp4",
+            "/etc/media/video2.mp4",
+            "/etc/media/video3.mp4",
+            "/etc/media/video4.mp4",
+            "/etc/media/video5.mp4",
+            "/etc/media/video6.mp4"
+        ],
+    "model": "/etc/models/yolov5.tflite",
+    "labels": "/etc/labels/yolov5.json",
+    "output-display": true
+}

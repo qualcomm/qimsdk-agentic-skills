@@ -1,0 +1,6 @@
+{
+  "database": [
+    { "id": 0, "label": "<PERSON_NAME_0>" },
+    { "id": 1, "label": "<PERSON_NAME_1>" }
+  ]
+}

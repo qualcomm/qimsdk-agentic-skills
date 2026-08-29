@@ -1,76 +1,78 @@
-# Contributing to <REPLACE-ME>
+# Contributing to qimsdk-agentic-skills
 
-Hi there!
-We’re thrilled that you’d like to contribute to this project.
-Your help is essential for keeping this project great and for making it better.
+Thank you for contributing to QIMSDK agentic skills. This repository contains
+portable skill bundles, sample prompts, and skill metadata for coding agents.
 
 ## Branching Strategy
 
-In general, contributors should develop on branches based off of `main` and pull requests should be made against `main`.
+Contributors should develop changes on topic branches based on `main` and submit
+pull requests back to `main`.
 
-## Submitting a pull request
+## Repository Layout
 
-1. Please read our [code of conduct](CODE-OF-CONDUCT.md) and [license](LICENSE.txt).
-1. [Fork](https://github.com/qualcomm/<REPLACE-ME>/fork) and clone the repository.
+- `skills/`: skill payloads. Each complete skill directory must contain
+  `SKILL.md`.
+- `skills-metadata/`: metadata records for skills.
+- `sample-prompts/`: sample prompts grouped by skill.
 
-    ```bash
-    git clone https://github.com/<username>/<REPLACE-ME>.git
-    ```
+Keep the top-level layout focused on the documented public release directories unless repository policy changes.
 
-1. Create a new branch based on `main`:
+## Submitting a Pull Request
 
-    ```bash
-    git checkout -b <my-branch-name> main
-    ```
-
-1. Create an upstream `remote` to make it easier to keep your branches up-to-date:
+1. Read the [code of conduct](CODE-OF-CONDUCT.md) and [license](LICENSE.txt).
+2. Fork and clone the repository:
 
     ```bash
-    git remote add upstream https://github.com/qualcomm/<REPLACE-ME>.git
+    git clone https://github.com/<username>/qimsdk-agentic-skills.git
     ```
 
-1. Make your changes, add tests, and make sure the tests still pass.
-1. Commit your changes using the [DCO](https://developercertificate.org/). You can attest to the DCO by commiting with the **-s** or **--signoff** options or manually adding the "Signed-off-by":
+3. Add the upstream remote if needed:
 
     ```bash
-    git commit -s -m "Really useful commit message"`
+    git remote add upstream https://github.com/qualcomm/qimsdk-agentic-skills.git
     ```
 
-1. After committing your changes on the topic branch, sync it with the upstream branch:
+4. Create a branch from latest `main`:
 
     ```bash
-    git pull --rebase upstream main
+    git fetch upstream main
+    git switch -c <branch-name> upstream/main
     ```
 
-1. Push to your fork.
+5. Make focused changes. If you add or update a skill under `skills/`, update
+   the matching metadata file under `skills-metadata/` and any relevant sample
+   prompts under `sample-prompts/`.
+6. Commit with DCO signoff:
 
     ```bash
-    git push -u origin <my-branch-name>
+    git commit -s -m "type(scope): short summary"
     ```
 
-    The `-u` is shorthand for `--set-upstream`. This will set up the tracking reference so subsequent runs of `git push` or `git pull` can omit the remote and branch.
+7. Rebase before pushing:
 
-1. [Submit a pull request](https://github.com/qualcomm/<REPLACE-ME>/pulls) from your branch to `main`.
-1. Pat yourself on the back and wait for your pull request to be reviewed.
+    ```bash
+    git fetch upstream main
+    git rebase upstream/main
+    ```
+
+8. Push to your fork:
+
+    ```bash
+    git push -u origin <branch-name>
+    ```
+
+9. Submit a pull request to `qualcomm/qimsdk-agentic-skills:main`.
+
+## Pull Request Expectations
+
+- Keep changes scoped to one logical update.
+- Preserve existing skill style and directory naming.
+- Do not rewrite API names, package names, paths, headers, library targets, or
+  command examples inside skill payloads unless the task explicitly requires it.
+- Update documentation when layout, behavior, or contributor rules change.
+- Include validation details in the pull request when applicable.
 
 ## Security Analysis of Pull Requests
 
-To maintain the security and integrity of this project, all pull requests from external contributors are automatically scanned using [Semgrep](https://github.com/semgrep/semgrep) to detect insecure coding patterns and potential security flaws.
-
-**Static Analysis with Semgrep:**  We use Semgrep to perform lightweight, fast static analysis on every PR. This helps identify risky code patterns and logic flaws early in the development process.
-
-**Contributor Responsibility:** If any issues are flagged, contributors are expected to resolve them before the PR can be merged.
-
-**Continuous Improvement:** Our Semgrep ruleset evolves over time to reflect best practices and emerging security concerns.
-
-By submitting a PR, you agree to participate in this process and help us keep the project secure for everyone.
-
-
-Here are a few things you can do that will increase the likelihood of your pull request to be accepted:
-
-- Follow the existing style where possible. **INSERT LINK TO STYLE, e.g. PEP8 for python**
-- Write tests.
-- Keep your change as focused as possible.
-  If you want to make multiple independent changes, please consider submitting them as separate pull requests.
-- Write a [good commit message](https://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
-- It's a good idea to arrange a discussion with other developers to ensure there is consensus on large features, architecture changes, and other core code changes. PR reviews will go much faster when there are no surprises.
+Pull requests may be scanned using automated security and repository checks. If
+issues are flagged, contributors are expected to resolve them before merge.

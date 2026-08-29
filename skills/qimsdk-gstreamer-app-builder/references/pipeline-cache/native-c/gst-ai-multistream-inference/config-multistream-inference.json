@@ -1,0 +1,18 @@
+{
+    "input-file-path":
+        [
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4",
+            "/etc/media/video.mp4"
+        ],
+
+    "model": "/etc/models/yolox_quantized.tflite",
+    "labels": "/etc/labels/yolox.json",
+    "output-display": true,
+    "use-case": 0
+}

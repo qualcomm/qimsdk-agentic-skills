@@ -1,0 +1,2005 @@
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
+/**
+ * Application:
+ * AI based daisy chain Object Detection and Classification
+ *
+ * Description:
+ * The application takes live video/file/rtsp stream and gives same to
+ * Yolo models for object detection and splits frame based on bounding box
+ * for classifcation, displays preview with overlayed
+ * AI Model output Labels.
+ *
+ * Pipeline for Gstreamer with Camera:
+ * qtiqmmfsrc   -> qmmfsrc_caps  -> tee
+ * Pipeline for Gstreamer with USB Camera:
+ * v4l2src   -> v4l2src_caps  -> tee
+ *     tee -> qtimetamux
+ *     tee  -> Pre process-> ML Framework -> Post process -> qtimetamux
+ *                          |-> qtivcomposer
+ *     qtimetamux -> tee -> |
+ *                          |-> qtivsplit ->tee (4 splits)
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee  ->|
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *     qtivcomposer (COMPOSITION) -> fpsdisplaysink (Display)
+ *
+ * Pipeline for Gstreamer with File/RTSP source:
+ *
+ * File source:
+ * filesrc -> qtdemux -> h264parse
+ *
+ * RTSP source:
+ * rtspsrc -> rtph264depay -> h264parse
+ *
+ * Common for both File and RTSP:
+ * h264parse -> v4l2h264dec  -> tee (2 splits)
+ *            | -> qtimetamux
+ *      tee ->|
+ *            | -> Pre process-> ML Framework -> Post process -> qtimetamux
+ *
+ *                          |-> qtivcomposer
+ *     qtimetamux -> tee -> |
+ *                          |-> qtivsplit ->tee (4 splits)
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee -> |
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *
+ *                                         | -> qtivcomposer
+ *                                  tee  ->|
+ *                                         | -> Pre process-> ML Framework
+ *                                           -> Post process -> qtivcomposer
+ *     qtivcomposer (COMPOSITION) -> fpsdisplaysink (Display)
+ *     Pre process: qtimlvconverter
+ *     ML Framework: qtimltflite
+ *     Post process: qtimlvdetection / qtimlvclassification -> filter
+ */
+
+#include <stdio.h>
+#include <glib-unix.h>
+#include <gst/gst.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <gst/video/video.h>
+#include <glib.h>
+#include <json-glib/json-glib.h>
+
+#include <gst_sample_apps_utils.h>
+
+/**
+ * Default models and labels path, if not provided by user
+ */
+#define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
+#define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
+    "/etc/models/inception_v3_quantized.tflite"
+#define DEFAULT_DETECTION_LABELS "/etc/labels/yolox.json"
+#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.json"
+
+/**
+ * Default path of config file
+ */
+#define DEFAULT_CONFIG_FILE "/etc/configs/config_daisychain_detection_classification.json"
+
+/**
+ * Default settings of camera output resolution, Scaling of camera output
+ * will be done in qtimlvconverter based on model input
+ */
+#define DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH 1280
+#define DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT 720
+#define USB_CAMERA_OUTPUT_WIDTH 1280
+#define USB_CAMERA_OUTPUT_HEIGHT 720
+#define DEFAULT_CAMERA_FRAME_RATE 30
+#define DEFAULT_OUTPUT_FILENAME "/etc/media/daisychain_detection_classification.mp4"
+#define DEFAULT_IP "127.0.0.1"
+#define DEFAULT_PORT "8900"
+#define MAX_VID_DEV_CNT 64
+
+/**
+ * Maximum count of various sources possible to configure
+ */
+#define QUEUE_COUNT 8
+#define TEE_COUNT 7
+#define DETECTION_COUNT 2
+#define CLASSIFICATION_COUNT 4
+#define TFLITE_ELEMENT_COUNT 5
+#define SPLIT_COUNT 4
+#define COMPOSER_SINK_COUNT 10
+#define SINGLE_ROI_META 2
+
+/**
+ * Structure for various application specific options
+ */
+typedef struct
+{
+  gboolean camera_source;
+  gchar *file_path;
+  gchar *rtsp_ip_port;
+  gchar *detection_model_path;
+  gchar *classification_model_path;
+  gchar *detection_labels_path;
+  gchar *classification_labels_path;
+  gchar *output_file;
+  gchar *output_ip_address;
+  gchar *port_num;
+  gchar *enable_usb_camera;
+  gchar dev_video[16];
+  enum GstSinkType sinktype;
+  enum GstVideoFormat video_format;
+  GstStreamSourceType source_type;
+  gboolean classification_use_cpu;
+  gboolean classification_use_gpu;
+  gboolean classification_use_dsp;
+  gboolean detection_use_cpu;
+  gboolean detection_use_gpu;
+  gboolean detection_use_dsp;
+  gboolean use_usb;
+  gint width;
+  gint height;
+  gint framerate;
+} GstAppOptions;
+
+
+/**
+ * GstDaisyChainModelType:
+ * @GST_DETECTION_TYPE_YOLO            : Yolox Object Detection Model.
+ * @GST_CLASSIFICATION_TYPE_INCEPTION  : Inception Classification Model.
+ *
+ * Type of Usecase.
+ */
+typedef enum
+{
+  GST_DETECTION_TYPE_YOLO,
+  GST_CLASSIFICATION_TYPE_INCEPTION
+} GstDaisyChainModelType;
+
+/**
+ * Static grid points to display 4 split stream
+ */
+static GstVideoRectangle composer_sink_position[COMPOSER_SINK_COUNT] = {
+  {0, 0, 1280, 720}, {0, 0, 1280, 720}, {0, 0, 384, 216}, {896, 0, 384, 216},
+  {0, 504, 384, 216}, {896, 504, 384, 216}, {0, 0, 384, 40},
+  {896, 0, 384, 40}, {0, 504, 384, 40}, {896, 504, 384, 40},
+};
+
+/**
+ * Free Application context:
+ *
+ * @param appctx Application Context object
+ */
+static void
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
+    gchar * config_file)
+{
+  // If specific pointer is not NULL, unref it
+  if (appctx->mloop != NULL) {
+    g_main_loop_unref (appctx->mloop);
+    appctx->mloop = NULL;
+  }
+
+  if (options->file_path != NULL) {
+    g_free ((gpointer) options->file_path);
+    options->file_path = NULL;
+  }
+
+  if (options->rtsp_ip_port != NULL) {
+    g_free ((gpointer) options->rtsp_ip_port);
+    options->rtsp_ip_port = NULL;
+  }
+
+  if (options->detection_model_path != NULL &&
+      options->detection_model_path !=
+      (gchar *) (&DEFAULT_TFLITE_YOLOX_MODEL)) {
+    g_free ((gpointer) options->detection_model_path);
+    options->detection_model_path = NULL;
+  }
+
+  if (options->classification_model_path != NULL &&
+      options->classification_model_path !=
+      (gchar *) (&DEFAULT_TFLITE_CLASSIFICATION_MODEL)) {
+    g_free ((gpointer) options->classification_model_path);
+    options->classification_model_path = NULL;
+  }
+
+  if (options->detection_labels_path != NULL &&
+      options->detection_labels_path != (gchar *)(&DEFAULT_DETECTION_LABELS)) {
+    g_free ((gpointer)options->detection_labels_path);
+    options->detection_labels_path = NULL;
+  }
+
+  if (options->classification_labels_path != NULL &&
+      options->classification_labels_path !=
+      (gchar *) (&DEFAULT_CLASSIFICATION_LABELS)) {
+    g_free ((gpointer) options->classification_labels_path);
+    options->classification_labels_path = NULL;
+  }
+
+  if (options->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME) &&
+      options->output_file != NULL) {
+    g_free ((gpointer)options->output_file);
+  }
+
+  if (options->output_ip_address != (gchar *)(&DEFAULT_IP) &&
+      options->output_ip_address != NULL) {
+    g_free ((gpointer)options->output_ip_address);
+  }
+
+  if (options->port_num != (gchar *)(&DEFAULT_PORT) &&
+      options->port_num != NULL) {
+    g_free ((gpointer)options->port_num);
+  }
+
+  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
+    g_free ((gpointer) config_file);
+    config_file = NULL;
+  }
+
+  if (appctx->pipeline != NULL) {
+    gst_object_unref (appctx->pipeline);
+    appctx->pipeline = NULL;
+  }
+}
+
+/**
+ * Find USB camera node:
+ *
+ * @param appctx Application Context object
+ */
+static gboolean
+find_usb_camera_node (GstAppOptions * appctx)
+{
+  struct v4l2_capability v2cap;
+  gint idx = 0, ret = 0, mFd = -1;
+
+  while (idx < MAX_VID_DEV_CNT) {
+    memset (appctx->dev_video, 0, sizeof (appctx->dev_video));
+
+    ret = snprintf (appctx->dev_video, sizeof (appctx->dev_video), "/dev/video%d",
+        idx);
+    if (ret <= 0) {
+      return FALSE;
+    }
+
+    g_print ("open USB camera device: %s\n", appctx->dev_video);
+    mFd = open (appctx->dev_video, O_RDWR);
+    if (mFd < 0) {
+      mFd = -1;
+      g_printerr ("Failed to open USB camera device: %s (%s)\n",
+          appctx->dev_video, strerror (errno));
+      idx++;
+      continue;
+    }
+
+    if (ioctl (mFd, VIDIOC_QUERYCAP, &v2cap) == 0) {
+      g_print ("ID_V4L_CAPABILITIES=: %s", v2cap.driver);
+      if (strcmp ((const char *) v2cap.driver, "uvcvideo") != 0) {
+        idx++;
+        close (mFd);
+        continue;
+      }
+    } else {
+      g_printerr ("Failed to QUERYCAP device: %s (%s)\n", appctx->dev_video,
+          strerror (errno));
+      idx++;
+      close (mFd);
+      continue;
+    }
+    break;
+  }
+
+  if (idx >= MAX_VID_DEV_CNT || mFd < 0 || ret < 0) {
+    g_printerr ("Failed to open video device");
+    close (mFd);
+    return FALSE;
+  }
+
+  close (mFd);
+  g_print ("open %s successful \n", appctx->dev_video);
+  return TRUE;
+}
+
+/**
+ * Build Property for pad.
+ *
+ * @param property Property Name.
+ * @param values Value of Property.
+ * @param num count of Property Values.
+ */
+static void
+build_pad_property (GValue * property, gint values[], gint num)
+{
+  GValue val = G_VALUE_INIT;
+  g_value_init (&val, G_TYPE_INT);
+
+  for (gint idx = 0; idx < num; idx++) {
+    g_value_set_int (&val, values[idx]);
+    gst_value_array_append_value (property, &val);
+  }
+
+  g_value_unset (&val);
+}
+
+/**
+ * Callback function used for demuxer dynamic pad.
+ *
+ * @param element Plugin supporting dynamic pad.
+ * @param pad The source pad that is added.
+ * @param data Userdata set at callback registration.
+ */
+static void
+on_pad_added (GstElement * element, GstPad * pad, gpointer data)
+{
+  GstPad *sinkpad = NULL;
+  gchar *caps_str = NULL;
+  GstElement *queue = (GstElement *) data;
+  GstCaps *caps = gst_pad_get_current_caps (pad);
+  if (!caps) {
+    caps = gst_pad_query_caps (pad, NULL);
+  }
+
+  if (caps) {
+    caps_str = gst_caps_to_string (caps);
+  } else {
+    g_print ("No caps available for this pad\n");
+  }
+
+  // Check if caps contains video
+  if (caps_str) {
+    if (g_strrstr (caps_str, "video")) {
+      // Get the static sink pad from the queue
+      sinkpad = gst_element_get_static_pad (queue, "sink");
+      // Get the static sink pad from the queue
+      g_assert (gst_pad_link (pad, sinkpad) == GST_PAD_LINK_OK);
+      gst_object_unref (sinkpad);
+    } else {
+      g_print ("Ignoring caps\n");
+    }
+  }
+  g_free (caps_str);
+  gst_caps_unref (caps);
+}
+
+/**
+ * Create GST pipeline: has 3 main steps
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Pointer.
+ * @param source_type Type of stream (camera/file/RTSP).
+ * @param file_source Location of video file.
+ * @param rtsp_source RTSP stream.
+ */
+static gboolean
+create_pipe (GstAppContext * appctx, const GstAppOptions options)
+{
+  GstElement *qtiqmmfsrc = NULL, *qmmfsrc_caps = NULL;
+  GstElement *queue[QUEUE_COUNT] = { NULL };
+  GstElement *tee[TEE_COUNT] = { NULL };
+  GstElement *qtimlvconverter[TFLITE_ELEMENT_COUNT] = { NULL };
+  GstElement *qtimlelement[TFLITE_ELEMENT_COUNT] = { NULL };
+  GstElement *classification_filter[CLASSIFICATION_COUNT] = { NULL };
+  GstElement *qtimlvdetection[DETECTION_COUNT] = { NULL };
+  GstElement *qtimlvclassification[CLASSIFICATION_COUNT] = { NULL };
+  GstElement *fpsdisplaysink = NULL, *waylandsink = NULL, *qtimetamux = NULL;
+  GstElement *qtivsplit = NULL, *qtivcomposer = NULL;
+  GstElement *filesrc = NULL, *qtdemux = NULL, *h264parse = NULL;
+  GstElement *rtspsrc = NULL, *rtph264depay = NULL, *v4l2h264dec = NULL;
+  GstElement *v4l2src = NULL, *v4l2src_caps = NULL, *qtivtransform = NULL;
+  GstElement *qtivtransform_capsfilter = NULL, *v4l2h264enc_file = NULL;
+  GstElement *videoconvert = NULL, *jpegdec = NULL;
+  GstElement *v4l2h264dec_caps = NULL, *video_caps_filter = NULL;
+  GstElement *h264parse_enc_file = NULL, *mp4mux = NULL, *filesink = NULL;
+  GstElement *v4l2h264enc_rtsp = NULL, *h264parse_enc_rtsp = NULL;
+  GstElement *qtirtspbin = NULL;
+  GstCaps *pad_filter = NULL, *filtercaps = NULL;
+  GstStructure *delegate_options = NULL;
+  gboolean ret = FALSE;
+  gchar element_name[128], settings[128];
+  gint preview_width = DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH;
+  gint preview_height = DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT;
+  gint framerate = DEFAULT_CAMERA_FRAME_RATE;
+  gint module_id;
+  gint pos_vals[2], dim_vals[2];
+
+  // 1. Create the elements or Plugins
+  if (options.source_type == GST_STREAM_TYPE_CAMERA) {
+    // Create qtiqmmfsrc plugin for camera stream
+    qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
+    if (!qtiqmmfsrc) {
+      g_printerr ("Failed to create qtiqmmfsrc\n");
+      goto error_clean_elements;
+    }
+
+    // Use capsfilter to define the camera output settings
+    qmmfsrc_caps = gst_element_factory_make ("capsfilter",
+        "qmmfsrc_caps");
+    if (!qmmfsrc_caps) {
+      g_printerr ("Failed to create qmmfsrc_caps\n");
+      goto error_clean_elements;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_FILE) {
+    // Create file source element for file stream
+    filesrc = gst_element_factory_make ("filesrc", "filesrc");
+    if (!filesrc ) {
+      g_printerr ("Failed to create filesrc\n");
+      goto error_clean_elements;
+    }
+
+    // Create qtdemux for demuxing the filesrc
+    qtdemux = gst_element_factory_make ("qtdemux", "qtdemux");
+    if (!qtdemux ) {
+      g_printerr ("Failed to create qtdemux\n");
+      goto error_clean_elements;
+    }
+
+    // Create h264parse element for parsing the stream
+    h264parse = gst_element_factory_make ("h264parse", "h264parse");
+    if (!h264parse) {
+      g_printerr ("Failed to create h264parse\n");
+      goto error_clean_elements;
+    }
+
+    // Create v4l2h264dec element for decoding the stream
+    v4l2h264dec = gst_element_factory_make ("v4l2h264dec", "v4l2h264dec");
+    if (!v4l2h264dec) {
+      g_printerr ("Failed to create v4l2h264dec\n");
+      goto error_clean_elements;
+    }
+
+    // Create caps for v4l2h264dec stream
+    v4l2h264dec_caps =
+        gst_element_factory_make ("capsfilter", "v4l2h264dec_caps");
+    if (!v4l2h264dec_caps) {
+      g_printerr ("Failed to create v4l2h264dec_caps\n");
+      goto error_clean_elements;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    // Create rtspsrc plugin for rtsp input
+    rtspsrc = gst_element_factory_make ("rtspsrc", "rtspsrc");
+    if (!rtspsrc) {
+      g_printerr ("Failed to create rtspsrc\n");
+      goto error_clean_elements;
+    }
+
+    // Create rtph264depay plugin for rtsp payload parsing
+    rtph264depay = gst_element_factory_make ("rtph264depay", "rtph264depay");
+    if (!rtph264depay) {
+      g_printerr ("Failed to create rtph264depay\n");
+      goto error_clean_elements;
+    }
+
+    // Create h264parse element for parsing the stream
+    h264parse = gst_element_factory_make ("h264parse", "h264parse");
+    if (!h264parse) {
+      g_printerr ("Failed to create h264parse\n");
+      goto error_clean_elements;
+    }
+
+    // Create v4l2h264dec element for decoding the stream
+    v4l2h264dec = gst_element_factory_make ("v4l2h264dec", "v4l2h264dec");
+    if (!v4l2h264dec) {
+      g_printerr ("Failed to create v4l2h264dec\n");
+      goto error_clean_elements;
+    }
+
+    // Create caps for v4l2h264dec stream
+    v4l2h264dec_caps =
+        gst_element_factory_make ("capsfilter", "v4l2h264dec_caps");
+    if (!v4l2h264dec_caps) {
+      g_printerr ("Failed to create v4l2h264dec_caps\n");
+      goto error_clean_elements;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    // 1. Create v4l2src plugin
+    v4l2src = gst_element_factory_make ("v4l2src", "v4l2src");
+    if (!v4l2src) {
+      g_printerr ("Failed to create v4l2src\n");
+      goto error_clean_elements;
+    }
+    // Use capsfilter to define the camera output settings
+    v4l2src_caps = gst_element_factory_make ("capsfilter", "v4l2src_caps");
+    if (!v4l2src_caps) {
+      g_printerr ("Failed to create v4l2src_caps\n");
+      goto error_clean_elements;
+    }
+    if (options.video_format == GST_YUV2_VIDEO_FORMAT) {
+      // 1. Create qtivtransform plugin
+      qtivtransform = gst_element_factory_make ("qtivtransform", "qtivtransform");
+      if (!qtivtransform) {
+        g_printerr ("Failed to create qtivtransform\n");
+        goto error_clean_elements;
+      }
+      //transform filter caps
+      qtivtransform_capsfilter = gst_element_factory_make ("capsfilter",
+          "qtivtransform_capsfilter");
+      if (!qtivtransform_capsfilter) {
+        g_printerr ("Failed to create qtivtransform_capsfilter\n");
+        goto error_clean_elements;
+      }
+    }
+    if (options.video_format == GST_MJPEG_VIDEO_FORMAT) {
+      // 1. Create qtivtransform plugin
+      qtivtransform = gst_element_factory_make ("qtivtransform", "qtivtransform");
+      if (!qtivtransform) {
+        g_printerr ("Failed to create qtivtransform\n");
+        goto error_clean_elements;
+      }
+      //transform filter caps
+      qtivtransform_capsfilter = gst_element_factory_make ("capsfilter",
+          "qtivtransform_capsfilter");
+      if (!qtivtransform_capsfilter) {
+        g_printerr ("Failed to create qtivtransform_capsfilter\n");
+        goto error_clean_elements;
+      }
+      videoconvert = gst_element_factory_make ("videoconvert", "videoconvert");
+      if (!videoconvert) {
+        g_printerr ("Failed to create videoconvert\n");
+        goto error_clean_elements;
+      }
+      jpegdec = gst_element_factory_make ("jpegdec", "jpegdec");
+      if (!jpegdec) {
+        g_printerr ("Failed to create jpegdec\n");
+        goto error_clean_elements;
+      }
+    }
+  } else {
+    g_printerr ("Invalid source type\n");
+    goto error_clean_elements;
+  }
+  // Create qtimetamux element to attach postprocessing string results
+  // on original frame
+  qtimetamux = gst_element_factory_make ("qtimetamux", "qtimetamux");
+  if (!qtimetamux) {
+    g_printerr ("Failed to create qtimetamux\n");
+    goto error_clean_elements;
+  }
+
+  // Create qtivcomposer to combine camera output with ML post proc output
+  qtivcomposer = gst_element_factory_make ("qtivcomposer", "qtivcomposer");
+  if (!qtivcomposer) {
+    g_printerr ("Failed to create qtivcomposer\n");
+    goto error_clean_elements;
+  }
+
+  // Create qtivsplit to split single stream to multiple streams
+  qtivsplit = gst_element_factory_make ("qtivsplit", "qtivsplit");
+  if (!qtivsplit) {
+    g_printerr ("Failed to create qtivsplit\n");
+    goto error_clean_elements;
+  }
+
+  // Capsfilter to get matching params of ML post proc o/p and qtivcomposer
+  video_caps_filter = gst_element_factory_make ("capsfilter",
+      "video_caps_filter");
+  if (!video_caps_filter) {
+    g_printerr ("Failed to create video_caps_filter\n");
+    goto error_clean_elements;
+  }
+
+  // Create queue element for processing
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+    snprintf (element_name, 127, "queue-%d", i);
+    queue[i] = gst_element_factory_make ("queue", element_name);
+    if (!queue[i]) {
+      g_printerr ("Failed to create queue %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Create tee to send same data buffer to mulitple elements
+  for (gint i = 0; i < TEE_COUNT; i++) {
+    snprintf (element_name, 127, "tee-%d", i);
+    tee[i] = gst_element_factory_make ("tee", element_name);
+    if (!tee[i]) {
+      g_printerr ("Failed to create tee %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Capsfilter to get matching params of ML post proc o/p and qtivcomposer
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    snprintf (element_name, 127, "classification_filter-%d", i);
+    classification_filter[i] =
+        gst_element_factory_make ("capsfilter", element_name);
+    if (!classification_filter[i]) {
+      g_printerr ("Failed to create classification_filter %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Create qtimlvconverter for Input preprocessing
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    snprintf (element_name, 127, "qtimlvconverter-%d", i);
+    qtimlvconverter[i] =
+        gst_element_factory_make ("qtimlvconverter", element_name);
+    if (!qtimlvconverter[i]) {
+      g_printerr ("Failed to create qtimlvconverter %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Create the ML inferencing plugin TFLite
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    snprintf (element_name, 127, "qtimltflite-%d", i);
+    qtimlelement[i] = gst_element_factory_make ("qtimltflite", element_name);
+    if (!qtimlelement[i]) {
+      g_printerr ("Failed to create qtimlelement %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Create plugin for ML postprocessing for object detection
+  for (gint i = 0; i < DETECTION_COUNT; i++) {
+    snprintf (element_name, 127, "qtimlvdetection-%d", i);
+    qtimlvdetection[i] =
+        gst_element_factory_make ("qtimlpostprocess", element_name);
+    if (!qtimlvdetection[i]) {
+      g_printerr ("Failed to create qtimlvdetection %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  // Create plugin for ML postprocessing for classification
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    snprintf (element_name, 127, "qtimlvclassification-%d", i);
+    qtimlvclassification[i] =
+        gst_element_factory_make ("qtimlpostprocess", element_name);
+    if (!qtimlvclassification[i]) {
+      g_printerr ("Failed to create qtimlvclassification %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  if (options.sinktype == GST_WAYLANDSINK) {
+  // Create Wayland compositor to render output on Display
+  waylandsink = gst_element_factory_make ("waylandsink", "waylandsink");
+    if (!waylandsink) {
+      g_printerr ("Failed to create waylandsink \n");
+      goto error_clean_elements;
+    }
+    // Create fpsdisplaysink to display the current and
+    // average framerate as a text overlay
+    fpsdisplaysink = gst_element_factory_make ("fpsdisplaysink",
+        "fpsdisplaysink");
+    if (!fpsdisplaysink) {
+      g_printerr ("Failed to create fpsdisplaysink\n");
+      goto error_clean_elements;
+    }
+  } else if (options.sinktype == GST_VIDEO_ENCODE) {
+    // Create Encoder plugin
+    v4l2h264enc_file = gst_element_factory_make ("v4l2h264enc",
+        "v4l2h264enc_file");
+    if (!v4l2h264enc_file) {
+      g_printerr ("Failed to create v4l2h264enc_file\n");
+      goto error_clean_elements;
+    }
+    // Create frame parser plugin
+    h264parse_enc_file = gst_element_factory_make ("h264parse",
+        "h264parse_enc_file");
+    if (!h264parse_enc_file) {
+      g_printerr ("Failed to create h264parse_enc_file\n");
+      goto error_clean_elements;
+    }
+    // Create mp4mux plugin to save file in mp4 container
+    mp4mux = gst_element_factory_make ("mp4mux", "mp4mux");
+    if (!mp4mux) {
+      g_printerr ("Failed to create mp4mux\n");
+      goto error_clean_elements;
+    }
+    // Generic filesink plugin to write file on disk
+    filesink = gst_element_factory_make ("filesink", "filesink");
+    if (!filesink) {
+      g_printerr ("Failed to create filesink\n");
+      goto error_clean_elements;
+    }
+  } else if (options.sinktype == GST_RTSP_STREAMING) {
+    // Create Encoder plugin
+    v4l2h264enc_rtsp = gst_element_factory_make ("v4l2h264enc",
+        "v4l2h264enc_rtsp");
+    if (!v4l2h264enc_rtsp) {
+      g_printerr ("Failed to create v4l2h264enc_rtsp\n");
+      goto error_clean_elements;
+    }
+    // Create frame parser plugin
+    h264parse_enc_rtsp = gst_element_factory_make ("h264parse",
+        "h264parse_enc_rtsp");
+    if (!h264parse_enc_rtsp) {
+      g_printerr ("Failed to create h264parse_enc_rtsp\n");
+      goto error_clean_elements;
+    }
+    // Generic qtirtspbin plugin for streaming
+    qtirtspbin = gst_element_factory_make ("qtirtspbin", "qtirtspbin");
+    if (!qtirtspbin) {
+      g_printerr ("Failed to create qtirtspbin\n");
+      goto error_clean_elements;
+    }
+  } else {
+    g_printerr ("Invalid output Sink Type\n");
+    goto error_clean_elements;
+  }
+
+  // 2. Set properties for all GST plugin elements
+  if (options.source_type == GST_STREAM_TYPE_CAMERA) {
+    // 2.1 Set the capabilities of camera stream
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12",
+        "width", G_TYPE_INT, preview_width,
+        "height", G_TYPE_INT, preview_height,
+        "framerate", GST_TYPE_FRACTION, framerate, 1, NULL);
+    g_object_set (G_OBJECT (qmmfsrc_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else if (options.source_type == GST_STREAM_TYPE_FILE) {
+    // 2.2 Set the capabilities of file stream
+    g_object_set (G_OBJECT (filesrc), "location", options.file_path, NULL);
+    gst_element_set_enum_property (v4l2h264dec, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264dec, "output-io-mode", "dmabuf");
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12", NULL);
+    g_object_set (G_OBJECT (v4l2h264dec_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    // 2.3 Set the capabilities of file stream
+    g_object_set (G_OBJECT (rtspsrc), "location", options.rtsp_ip_port, NULL);
+    gst_element_set_enum_property (v4l2h264dec, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264dec, "output-io-mode", "dmabuf");
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12", NULL);
+    g_object_set (G_OBJECT (v4l2h264dec_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else if (options.source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    g_object_set (G_OBJECT (v4l2src), "io-mode", "dmabuf", NULL);
+    g_object_set (G_OBJECT (v4l2src), "device", options.dev_video, NULL);
+
+    // 2.4 Set the capabilities of USB camera plugin output for inference
+    if (options.video_format == GST_NV12_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "NV12",
+          "width", G_TYPE_INT, options.width,
+          "height", G_TYPE_INT, options.height,
+          "framerate", GST_TYPE_FRACTION, options.framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    }
+    else if (options.video_format == GST_MJPEG_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("image/jpeg",
+          "width", G_TYPE_INT, options.width,
+          "height", G_TYPE_INT, options.height,
+          "framerate", GST_TYPE_FRACTION, options.framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12", NULL);
+      g_object_set (G_OBJECT (qtivtransform_capsfilter), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    } else if (options.video_format == GST_YUV2_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "YUY2",
+          "width", G_TYPE_INT, options.width,
+          "height", G_TYPE_INT, options.height,
+          "framerate", GST_TYPE_FRACTION, options.framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "NV12", NULL);
+      g_object_set (G_OBJECT (qtivtransform_capsfilter), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    }
+  } else {
+    g_printerr ("Invalid source type\n");
+    goto error_clean_elements;
+  }
+
+  // 2.4 Set the properties of pad_filter for negotiation with qtivcomposer
+  // for classification
+  pad_filter = gst_caps_new_simple ("video/x-raw",
+      "width", G_TYPE_INT, 384, "height", G_TYPE_INT, 40, NULL);
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    g_object_set (G_OBJECT (classification_filter[i]), "caps", pad_filter,
+        NULL);
+  }
+  gst_caps_unref (pad_filter);
+
+  pad_filter = gst_caps_new_simple ("video/x-raw",
+      "width", G_TYPE_INT, 512, "height", G_TYPE_INT, 288, NULL);
+  g_object_set (G_OBJECT (video_caps_filter), "caps", pad_filter, NULL);
+  gst_caps_unref (pad_filter);
+
+  // 2.5 Select the HW for model inferencing using delegate property
+  GstMLTFLiteDelegate tflite_delegate;
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    if (i == GST_DETECTION_TYPE_YOLO) {
+      g_object_set (G_OBJECT (qtimlelement[i]),
+          "model", options.detection_model_path, NULL);
+    } else {
+      g_object_set (G_OBJECT (qtimlelement[i]),
+          "model", options.classification_model_path, NULL);
+    }
+  }
+  if (options.detection_use_cpu) {
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
+    g_print ("Using CPU Delegate for Detection\n");
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid\n");
+      goto error_clean_elements;
+  }
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]), "delegate",
+        tflite_delegate, NULL);
+  }
+  if (options.classification_use_cpu) {
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
+    g_print ("Using CPU Delegate for Classification\n");
+    gint valid_elements = 0;
+    // Validate all classification elements (indices 1 through
+    // TFLITE_ELEMENT_COUNT-1)
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+      if (qtimlelement[i] == NULL) {
+        g_printerr("Element at index %d is NULL\n", i);
+        continue;
+      }
+      if (!G_IS_OBJECT(qtimlelement[i])) {
+        g_printerr("Invalid element at index %d\n", i);
+        continue;
+      }
+      g_object_set (G_OBJECT (qtimlelement[i]),
+          "delegate", tflite_delegate, NULL);
+      valid_elements++;
+    }
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "CPU delegate\n");
+      goto error_clean_elements;
+    }
+  }
+  if (options.classification_use_gpu) {
+    g_print ("Using GPU delegate for Classification\n");
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
+    gint valid_elements = 0;
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+        if (qtimlelement[i] == NULL) {
+          g_printerr("Element at index %d is NULL\n", i);
+          continue;
+        }
+        if (!G_IS_OBJECT(qtimlelement[i])) {
+          g_printerr("Invalid element at index %d\n", i);
+          continue;
+        }
+        g_object_set (G_OBJECT (qtimlelement[i]),
+          "delegate", tflite_delegate, NULL);
+        valid_elements++;
+    }
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "GPU delegate\n");
+      goto error_clean_elements;
+    }
+  }
+  if (options.detection_use_gpu) {
+    g_print ("Using GPU delegate for Detection\n");
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid\n");
+      goto error_clean_elements;
+    }
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "delegate", tflite_delegate, NULL);
+  }
+  if (options.classification_use_dsp) {
+    g_print ("Using DSP delegate with TFLITE for Classification\n");
+    delegate_options =
+        gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
+        NULL);
+    gint valid_elements = 0;
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+        if (qtimlelement[i] == NULL) {
+          g_printerr("Element at index %d is NULL\n", i);
+          continue;
+        }
+        if (!G_IS_OBJECT(qtimlelement[i])) {
+          g_printerr("Invalid element at index %d\n", i);
+          continue;
+        }
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "external_delegate_options", delegate_options, NULL);
+        valid_elements++;
+    }
+    gst_structure_free (delegate_options);
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "DSP delegate\n");
+      goto error_clean_elements;
+    }
+  }
+  if (options.detection_use_dsp) {
+    g_print ("Using DSP delegate with TFLITE for Detection\n");
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid for DSP delegate\n");
+      goto error_clean_elements;
+    }
+    delegate_options =
+        gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
+        NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]), "delegate",
+        GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "external_delegate_options", delegate_options, NULL);
+    gst_structure_free (delegate_options);
+  }
+
+  // 2.6 Set properties for detection postproc plugins- module, labels,
+  // threshold, constants
+  for (gint i = 0; i < DETECTION_COUNT; i++) {
+    module_id = get_enum_value (qtimlvdetection[i], "module", "yolov8");
+    if (module_id != -1) {
+      snprintf (settings, 127, "{\"confidence\": %.1f}", 75.0);
+      g_object_set (G_OBJECT (qtimlvdetection[i]),
+          "results", 4,
+          "module", module_id, "labels", options.detection_labels_path, NULL);
+    } else {
+      g_printerr ("Module yolov8 is not available in qtimlvdetection.\n");
+      goto error_clean_elements;
+    }
+  }
+
+  // 2.7 Set properties for classification postproc plugins- module, labels,
+  // threshold
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    module_id = get_enum_value (qtimlvclassification[i], "module",
+        "mobilenet-softmax");
+    if (module_id != -1) {
+      snprintf (settings, 127, "{\"confidence\": %.1f}", 60.0);
+      g_object_set (G_OBJECT (qtimlvclassification[i]),
+          "results", 3,
+          "module", module_id,
+          "labels", options.classification_labels_path, NULL);
+    } else {
+      g_printerr
+          ("Module mobilenet-softmax is not available in qtimlvclassification.\n");
+      goto error_clean_elements;
+    }
+  }
+
+  if (options.sinktype == GST_WAYLANDSINK) {
+    // 2.7 Set the properties of Wayland compositor
+    g_object_set (G_OBJECT (waylandsink), "sync", FALSE, NULL);
+    g_object_set (G_OBJECT (waylandsink), "fullscreen", TRUE, NULL);
+    // 2.8 Set the properties of fpsdisplaysink plugin- sync,
+    // signal-fps-measurements, text-overlay and video-sink
+    g_object_set (G_OBJECT (fpsdisplaysink), "signal-fps-measurements", TRUE, NULL);
+    g_object_set (G_OBJECT (fpsdisplaysink), "text-overlay", TRUE, NULL);
+    g_object_set (G_OBJECT (fpsdisplaysink), "video-sink", waylandsink, NULL);
+    g_object_set (G_OBJECT (fpsdisplaysink), "sync", TRUE, NULL);
+  } else if (options.sinktype == GST_VIDEO_ENCODE) {
+    gst_element_set_enum_property (v4l2h264enc_file, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264enc_file, "output-io-mode",
+        "dmabuf-import");
+    g_object_set (G_OBJECT (filesink), "location", options.output_file, NULL);
+  } else if (options.sinktype == GST_RTSP_STREAMING) {
+    gst_element_set_enum_property (v4l2h264enc_rtsp, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264enc_rtsp, "output-io-mode",
+        "dmabuf-import");
+    g_object_set (G_OBJECT (h264parse_enc_rtsp), "config-interval", 1, NULL);
+    g_object_set (G_OBJECT (qtirtspbin), "address", options.output_ip_address,
+        "port", options.port_num, NULL);
+  } else {
+    g_printerr ("Incorrect output sink type\n");
+    goto error_clean_elements;
+  }
+
+  // 3. Setup the pipeline
+  g_print ("Adding all elements to the pipeline...\n");
+
+  if (options.source_type == GST_STREAM_TYPE_CAMERA) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc,
+        qmmfsrc_caps, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_FILE) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline),
+        filesrc, qtdemux, h264parse, v4l2h264dec, v4l2h264dec_caps, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline),
+        rtspsrc, rtph264depay, h264parse, v4l2h264dec, v4l2h264dec_caps, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2src, v4l2src_caps, NULL);
+    if (options.video_format == GST_YUV2_VIDEO_FORMAT) {
+      gst_bin_add_many (GST_BIN (appctx->pipeline), qtivtransform,
+          qtivtransform_capsfilter, NULL);
+    }
+    if (options.video_format == GST_MJPEG_VIDEO_FORMAT) {
+      gst_bin_add_many (GST_BIN (appctx->pipeline), qtivtransform,
+          qtivtransform_capsfilter, videoconvert, jpegdec, NULL);
+    }
+  } else {
+    g_printerr ("Invalid Input Source\n");
+    goto error_clean_elements;
+  }
+
+  gst_bin_add_many (GST_BIN (appctx->pipeline),
+      qtimetamux, qtivsplit, qtivcomposer, video_caps_filter, NULL);
+
+  if (options.sinktype == GST_WAYLANDSINK) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), fpsdisplaysink, NULL);
+  } else if (options.sinktype == GST_VIDEO_ENCODE) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2h264enc_file, h264parse_enc_file,
+        mp4mux, filesink, NULL);
+  } else if (options.sinktype == GST_RTSP_STREAMING) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2h264enc_rtsp,
+        h264parse_enc_rtsp, qtirtspbin, NULL);
+  } else {
+    g_printerr ("Incorrect output sink type\n");
+    goto error_clean_elements;
+  }
+
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
+  }
+
+  for (gint i = 0; i < TEE_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), tee[i], NULL);
+  }
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), classification_filter[i],
+        NULL);
+  }
+
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtimlelement[i], NULL);
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtimlvconverter[i], NULL);
+  }
+
+  for (gint i = 0; i < DETECTION_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtimlvdetection[i], NULL);
+  }
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtimlvclassification[i],
+        NULL);
+  }
+
+  // 3.1 Create pipeline for Parallel Inferencing
+  g_print ("Linking elements...\n");
+  if (options.source_type == GST_STREAM_TYPE_CAMERA) {
+    ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_caps, tee[0], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements qtiqmmfsrc -> qmmfsrc_caps "
+          " -> tee cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+
+    ret = gst_element_link_many (tee[0], queue[0], qtimetamux, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee-> qtimetamux"
+          " cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+
+    ret = gst_element_link_many (tee[0], queue[1], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee -> queue cannot be linked."
+          "Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_FILE) {
+    ret = gst_element_link_many (filesrc, qtdemux, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements filesrc -> qtdemux elements "
+          "cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+
+    ret = gst_element_link_many (queue[0], h264parse, v4l2h264dec,
+        v4l2h264dec_caps, tee[0], qtimetamux, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements qtdemux -> h264parse -> v4l2h264dec"
+          " ->qtimetamux  cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+
+    ret = gst_element_link_many (tee[0], queue[1], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee -> queue cannot be linked."
+          "Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    ret = gst_element_link_many (queue[0], rtph264depay, h264parse,
+        v4l2h264dec, v4l2h264dec_caps, tee[0], qtimetamux, NULL);
+    if (!ret) {
+      g_printerr
+          ("\n pipeline elements rtph264depay -> h264parse -> v4l2h264dec"
+          " -> qtimetamux cannot be linked.Exiting.\n");
+      goto error_clean_pipeline;
+    }
+
+    ret = gst_element_link_many (tee[0], queue[1], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee and queue cannot be linked."
+          "Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  } else if (options.source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    if (options.video_format == GST_NV12_VIDEO_FORMAT) {
+      ret = gst_element_link_many (v4l2src, v4l2src_caps, tee[0], NULL);
+      if (!ret) {
+        g_printerr ("Pipeline elements cannot be linked for"
+            " usbsource->tee\n");
+        goto error_clean_pipeline;
+      }
+    } else if (options.video_format == GST_YUV2_VIDEO_FORMAT) {
+      ret = gst_element_link_many (v4l2src, v4l2src_caps, qtivtransform,
+          qtivtransform_capsfilter, tee[0], NULL);
+      if (!ret) {
+        g_printerr ("Pipeline elements cannot be linked for"
+            " usbsource->tee\n");
+        goto error_clean_pipeline;
+      }
+    } else if (options.video_format == GST_MJPEG_VIDEO_FORMAT) {
+      ret = gst_element_link_many (v4l2src, v4l2src_caps, jpegdec, videoconvert,
+          qtivtransform_capsfilter, qtivtransform, tee[0], NULL);
+      if (!ret) {
+        g_printerr ("Pipeline elements cannot be linked for"
+            " usbsource->jpegdec->tee\n");
+        goto error_clean_pipeline;
+      }
+    }
+    ret = gst_element_link_many (tee[0], queue[0], qtimetamux, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee-> qtimetamux"
+          " cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+    ret = gst_element_link_many (tee[0], queue[1], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee -> queue cannot be linked."
+          "Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  } else {
+    g_printerr ("Invalid Input Source\n");
+    goto error_clean_elements;
+  }
+
+  ret =
+      gst_element_link_many (queue[1], qtimlvconverter[0], qtimlelement[0],
+      tee[1], qtimlvdetection[0], NULL);
+  if (!ret) {
+    g_printerr ("\n pipeline elements src -> qtimlvconverter -> qtimlelement "
+        " -> qtimlvdetection cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+
+  filtercaps = gst_caps_from_string ("text/x-raw");
+  ret = gst_element_link_filtered (qtimlvdetection[0], qtimetamux, filtercaps);
+  if (!ret) {
+    g_printerr ("\n pipeline elements qtimlvdetection -> qtimetamux "
+        "cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+  gst_caps_unref (filtercaps);
+
+  ret = gst_element_link_many (qtimetamux, tee[2], NULL);
+  if (!ret) {
+    g_printerr ("\n pipeline element qtimetamux -> tee "
+        "cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+
+  ret = gst_element_link_many (tee[2], queue[2], qtivcomposer, NULL);
+  if (!ret) {
+    g_printerr ("\n pipeline elements tee -> qtivcomposer "
+        "cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+
+  ret = gst_element_link_many (tee[1], qtimlvdetection[1], video_caps_filter,
+      qtivcomposer, NULL);
+  if (!ret) {
+    g_printerr ("\n pipeline elements tee -> qtimlvdetection ->"
+        " video_caps_filter cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+
+  ret = gst_element_link_many (tee[2], qtivsplit, NULL);
+  if (!ret) {
+    g_printerr ("\n pipeline elements tee -> qtivsplit "
+        "cannot be linked. Exiting.\n");
+    goto error_clean_pipeline;
+  }
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    ret = gst_element_link_many (qtivsplit, tee[i + 3], NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements qtivsplit -> tee "
+          "cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  }
+
+  // 3.2 Create links for all 4 splits
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    ret = gst_element_link_many (tee[i + 3], queue[i + 3], qtivcomposer, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements tee -> qtivcomposer "
+          "cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  }
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    ret = gst_element_link_many (tee[i + 3],
+        qtimlvconverter[i + 1], qtimlelement[i + 1],
+        qtimlvclassification[i], classification_filter[i], qtivcomposer, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements qtimlvconverter -> qtimlelement "
+          " -> qtimlvclassification and  qtivcomposer cannot be linked. "
+          "Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  }
+
+  if (options.sinktype == GST_WAYLANDSINK) {
+    ret = gst_element_link_many (qtivcomposer, fpsdisplaysink, NULL);
+    if (!ret) {
+      g_printerr ("\n pipeline elements qtivcomposer -> fpsdisplaysink "
+          "cannot be linked. Exiting.\n");
+      goto error_clean_pipeline;
+    }
+  } else if (options.sinktype == GST_VIDEO_ENCODE) {
+    ret = gst_element_link_many (qtivcomposer, v4l2h264enc_file,
+        h264parse_enc_file, mp4mux, filesink, NULL);
+    if (!ret) {
+      g_printerr ("Pipeline elements cannot be linked for"
+          " qtivcomposer->filesink\n");
+      goto error_clean_pipeline;
+    }
+  } else if (options.sinktype == GST_RTSP_STREAMING) {
+    ret = gst_element_link_many (qtivcomposer, v4l2h264enc_rtsp,
+        h264parse_enc_rtsp, qtirtspbin, NULL);
+    if (!ret) {
+      g_printerr ("Pipeline elements cannot be linked for"
+          " qtivcomposer->qtirtspbin\n");
+      goto error_clean_pipeline;
+    }
+  } else {
+      g_printerr ("Invalid output sink type\n");
+      goto error_clean_pipeline;
+  }
+
+  g_print ("All elements are linked successfully\n");
+
+  if (options.source_type == GST_STREAM_TYPE_FILE) {
+    // 3.3 Set pad to link dynamic video to queue
+    g_signal_connect (qtdemux, "pad-added", G_CALLBACK (on_pad_added),
+        queue[0]);
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    // 3.3 Set pad to link dynamic video to queue
+    g_signal_connect (rtspsrc, "pad-added", G_CALLBACK (on_pad_added),
+        queue[0]);
+  }
+
+  // 3.4 Set src properties of qtivsplit for all splits
+  for (gint i = 0; i < SPLIT_COUNT; i++) {
+    GstPad *vsplit_src;
+    GValue value = G_VALUE_INIT;
+    g_value_init (&value, G_TYPE_INT);
+
+    snprintf (element_name, 127, "src_%d", i);
+    vsplit_src = gst_element_get_static_pad (qtivsplit, element_name);
+    if (vsplit_src == NULL) {
+      g_printerr ("src pad of qtivsplit couldn't be retrieved\n");
+      goto error_clean_pipeline;
+    }
+    // Set split mode as single-roi-meta
+    g_value_set_int (&value, SINGLE_ROI_META);
+    g_object_set_property (G_OBJECT (vsplit_src), "mode", &value);
+
+    g_value_unset (&value);
+    gst_object_unref (vsplit_src);
+  }
+
+  for (gint i = 0; i < COMPOSER_SINK_COUNT; i++) {
+    GstPad *vcomposer_sink;
+    GValue position = G_VALUE_INIT;
+    GValue dimension = G_VALUE_INIT;
+
+    snprintf (element_name, 127, "sink_%d", i);
+    vcomposer_sink = gst_element_get_static_pad (qtivcomposer, element_name);
+    if (vcomposer_sink == NULL) {
+      g_printerr ("Sink pad %d of vcomposer couldn't be retrieved\n", i);
+      goto error_clean_pipeline;
+    }
+
+    g_value_init (&position, GST_TYPE_ARRAY);
+    g_value_init (&dimension, GST_TYPE_ARRAY);
+
+    GstVideoRectangle pos = composer_sink_position[i];
+    pos_vals[0] = pos.x;
+    pos_vals[1] = pos.y;
+    dim_vals[0] = pos.w;
+    dim_vals[1] = pos.h;
+
+    build_pad_property (&position, pos_vals, 2);
+    build_pad_property (&dimension, dim_vals, 2);
+
+    g_object_set_property (G_OBJECT (vcomposer_sink), "position", &position);
+    g_object_set_property (G_OBJECT (vcomposer_sink), "dimensions", &dimension);
+
+    g_value_unset (&position);
+    g_value_unset (&dimension);
+    gst_object_unref (vcomposer_sink);
+  }
+
+  return TRUE;
+
+error_clean_pipeline:
+  gst_object_unref (appctx->pipeline);
+  return FALSE;
+
+error_clean_elements:
+  g_printerr ("Pipeline elements cannot be linked\n");
+  if (options.source_type == GST_STREAM_TYPE_CAMERA) {
+    cleanup_gst (&qtiqmmfsrc, &qmmfsrc_caps, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_FILE) {
+    cleanup_gst (&filesrc, &qtdemux, &h264parse, &v4l2h264dec,
+        &v4l2h264dec_caps, &qtimetamux, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_RTSP) {
+    cleanup_gst (&rtspsrc, &rtph264depay, &h264parse, &v4l2h264dec,
+        &v4l2h264dec_caps, &qtimetamux, NULL);
+  } else if (options.source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    cleanup_gst (&v4l2src, &v4l2src_caps, NULL);
+    if (options.video_format == GST_YUV2_VIDEO_FORMAT) {
+      cleanup_gst (&qtivtransform, &qtivtransform_capsfilter, NULL);
+    }
+    if (options.video_format == GST_MJPEG_VIDEO_FORMAT) {
+      cleanup_gst (&qtivtransform, &qtivtransform_capsfilter,
+          &videoconvert, &jpegdec, NULL);
+    }
+  } else {
+    g_printerr ("Invalid Input Source\n");
+    goto error_clean_elements;
+  }
+
+  cleanup_gst (&qtivsplit, &qtivcomposer, &fpsdisplaysink,
+      &waylandsink, &video_caps_filter, &v4l2h264enc_file,
+      &h264parse_enc_file, &mp4mux, &filesink, &v4l2h264enc_rtsp,
+      &h264parse_enc_rtsp, &qtirtspbin, NULL);
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    if (classification_filter[i]) {
+      gst_object_unref (classification_filter[i]);
+    }
+  }
+
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    if (qtimlelement[i]) {
+      gst_object_unref (qtimlelement[i]);
+    }
+  }
+
+  for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
+    if (qtimlvconverter[i]) {
+      gst_object_unref (qtimlvconverter[i]);
+    }
+  }
+
+  for (gint i = 0; i < DETECTION_COUNT; i++) {
+    if (qtimlvdetection[i]) {
+      gst_object_unref (qtimlvdetection[i]);
+    }
+  }
+
+  for (gint i = 0; i < CLASSIFICATION_COUNT; i++) {
+    if (qtimlvclassification[i]) {
+      gst_object_unref (qtimlvclassification[i]);
+    }
+  }
+
+  for (gint i = 0; i < TEE_COUNT; i++) {
+    if (tee[i]) {
+      gst_object_unref (tee[i]);
+    }
+  }
+
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+    if (queue[i]) {
+      gst_object_unref (queue[i]);
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Parse JSON file to read input parameters
+ *
+ * @param config_file Path to config file
+ * @param options Application specific options
+ */
+gint
+parse_json (gchar * config_file, GstAppOptions * options)
+{
+  JsonParser *parser = NULL;
+  JsonNode *root = NULL;
+  JsonObject *root_obj = NULL;
+  GError *error = NULL;
+
+  parser = json_parser_new ();
+
+  // Load the JSON file
+  if (!json_parser_load_from_file (parser, config_file, &error)) {
+    g_printerr ("Unable to parse JSON file: %s\n", error->message);
+    g_error_free (error);
+    g_object_unref (parser);
+    return -1;
+  }
+
+  // Get the root object
+  root = json_parser_get_root (parser);
+  if (!JSON_NODE_HOLDS_OBJECT (root)) {
+    gst_printerr ("Failed to load json object\n");
+    g_object_unref (parser);
+    return -1;
+  }
+
+  root_obj = json_node_get_object (root);
+
+  if (json_object_has_member (root_obj, "input-file")) {
+    options->file_path =
+        g_strdup (json_object_get_string_member (root_obj, "input-file"));
+  }
+
+  if (json_object_has_member (root_obj, "rtsp-ip-port")) {
+    options->rtsp_ip_port =
+        g_strdup (json_object_get_string_member (root_obj, "rtsp-ip-port"));
+  }
+
+  if (json_object_has_member (root_obj, "enable-usb-camera")) {
+    options->enable_usb_camera =
+        g_strdup (json_object_get_string_member (root_obj, "enable-usb-camera"));
+    if (g_strcmp0 (options->enable_usb_camera, "TRUE") == 0) {
+      options->use_usb = TRUE;
+    } else if (g_strcmp0 (options->enable_usb_camera, "FALSE") == 0) {
+      options->use_usb = FALSE;
+    } else {
+      gst_printerr ("enable-usb-camera can only be one of "
+          "\"TRUE\", \"FALSE\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+  }
+
+  gboolean camera_is_available = is_camera_available ();
+
+  if (camera_is_available) {
+    if ((!json_object_has_member (root_obj, "rtsp-ip-port")) &&
+        (!json_object_has_member (root_obj, "input-file")) &&
+        (options->use_usb == FALSE))
+      options->camera_source = TRUE;
+  }
+
+  if (json_object_has_member (root_obj, "output-file")) {
+    options->output_file =
+        g_strdup (json_object_get_string_member (root_obj, "output-file"));
+    g_print ("Output File Name : %s\n", options->output_file);
+  }
+
+  if (json_object_has_member (root_obj, "detection-model")) {
+    options->detection_model_path =
+        g_strdup (json_object_get_string_member (root_obj, "detection-model"));
+  }
+
+  if (json_object_has_member (root_obj, "detection-labels")) {
+    options->detection_labels_path =
+        g_strdup (json_object_get_string_member (root_obj, "detection-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "classification-model")) {
+    options->classification_model_path =
+        g_strdup (json_object_get_string_member (root_obj,
+            "classification-model"));
+  }
+
+  if (json_object_has_member (root_obj, "classification-labels")) {
+    options->classification_labels_path =
+        g_strdup (json_object_get_string_member (root_obj,
+            "classification-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "detection-runtime")) {
+    const gchar *delegate = json_object_get_string_member (root_obj,
+        "detection-runtime");
+    if (g_strcmp0 (delegate, "cpu") == 0)
+      options->detection_use_cpu = TRUE;
+    else if (g_strcmp0 (delegate, "dsp") == 0)
+      options->detection_use_dsp = TRUE;
+    else if (g_strcmp0 (delegate, "gpu") == 0)
+      options->detection_use_gpu = TRUE;
+    else {
+      gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+    }
+    g_print ("Detection delegate : %s\n", delegate);
+  }
+
+  if (json_object_has_member (root_obj, "classification-runtime")) {
+    const gchar *delegate = json_object_get_string_member (root_obj,
+        "classification-runtime");
+    if (g_strcmp0 (delegate, "cpu") == 0)
+      options->classification_use_cpu = TRUE;
+    else if (g_strcmp0 (delegate, "dsp") == 0)
+      options->classification_use_dsp = TRUE;
+    else if (g_strcmp0 (delegate, "gpu") == 0)
+      options->classification_use_gpu = TRUE;
+    else {
+      gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+    }
+    g_print ("Classification delegate : %s\n", delegate);
+  }
+
+  if (json_object_has_member (root_obj, "video-format")) {
+    const gchar *video_format_type =
+        json_object_get_string_member (root_obj, "video-format");
+    if (g_strcmp0 (video_format_type, "nv12") == 0) {
+      options->video_format = GST_NV12_VIDEO_FORMAT;
+      g_print ("Selected Video Format : NV12 \n");
+    } else if (g_strcmp0 (video_format_type, "yuy2") == 0) {
+      options->video_format = GST_YUV2_VIDEO_FORMAT;
+      g_print ("Selected Video Format : YUY2\n");
+    } else if (g_strcmp0 (video_format_type, "mjpeg") == 0) {
+      options->video_format = GST_MJPEG_VIDEO_FORMAT;
+      g_print ("Selected Video Format : MJPEG\n");
+    } else {
+      gst_printerr ("video-format can only be one of "
+          "\"nv12\", \"yuy2\" or \"mjpeg\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+  }
+
+  if (json_object_has_member (root_obj, "output-type")) {
+    const gchar *output_type =
+        json_object_get_string_member (root_obj, "output-type");
+    if (g_strcmp0 (output_type, "waylandsink") == 0)
+      options->sinktype = GST_WAYLANDSINK;
+    else if (g_strcmp0 (output_type, "filesink") == 0)
+      options->sinktype = GST_VIDEO_ENCODE;
+    else if (g_strcmp0 (output_type, "rtspsink") == 0)
+      options->sinktype = GST_RTSP_STREAMING;
+    else {
+      gst_printerr ("output-type can only be one of "
+          "\"waylandsink\", \"filesink\" or \"rtspsink\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+  }
+
+  if (json_object_has_member (root_obj, "width")) {
+    options->width = json_object_get_int_member (root_obj, "width");
+    g_print ("Width : %d\n", options->width);
+  }
+
+  if (json_object_has_member (root_obj, "height")) {
+    options->height = json_object_get_int_member (root_obj, "height");
+    g_print ("Height : %d\n", options->height);
+  }
+
+  if (json_object_has_member (root_obj, "framerate")) {
+    options->framerate = json_object_get_int_member (root_obj, "framerate");
+    g_print ("Frame Rate : %d\n", options->framerate);
+  }
+
+  if (json_object_has_member (root_obj, "output-ip-address")) {
+    options->output_ip_address =
+        g_strdup (json_object_get_string_member (root_obj, "output-ip-address"));
+    g_print ("Output Ip Address : %s\n", options->output_ip_address);
+  }
+
+  if (json_object_has_member (root_obj, "port")) {
+    options->port_num =
+        g_strdup (json_object_get_string_member (root_obj, "port"));
+    g_print ("Port Number : %s\n", options->port_num);
+  }
+
+  g_object_unref (parser);
+  return 0;
+}
+
+gint
+main (gint argc, gchar * argv[])
+{
+  GstBus *bus = NULL;
+  GMainLoop *mloop = NULL;
+  GstElement *pipeline = NULL;
+  GOptionContext *ctx = NULL;
+  const gchar *app_name = NULL;
+  GstAppOptions options = { };
+  GstAppContext appctx = { };
+  gboolean ret = FALSE;
+  gchar help_description[4096];
+  guint intrpt_watch_id = 0;
+  gchar *config_file = NULL;
+
+  options.file_path = NULL;
+  options.rtsp_ip_port = NULL;
+  options.camera_source = FALSE;
+  options.detection_model_path = NULL;
+  options.classification_model_path = NULL;
+  options.detection_labels_path = NULL;
+  options.classification_labels_path = NULL;
+  options.classification_use_cpu = FALSE, options.classification_use_gpu = FALSE;
+  options.classification_use_dsp = FALSE;
+  options.detection_use_cpu = FALSE, options.detection_use_gpu = FALSE;
+  options.detection_use_dsp = FALSE;
+  options.use_usb = FALSE;
+  options.width = USB_CAMERA_OUTPUT_WIDTH;
+  options.height = USB_CAMERA_OUTPUT_HEIGHT;
+  options.video_format = GST_NV12_VIDEO_FORMAT;
+  options.framerate = DEFAULT_CAMERA_FRAME_RATE;
+  options.output_file = DEFAULT_OUTPUT_FILENAME;
+  options.output_ip_address = DEFAULT_IP;
+  options.port_num = DEFAULT_PORT;
+
+  // Structure to define the user options selection
+  GOptionEntry entries[] = {
+    { "config-file", 0, 0, G_OPTION_ARG_STRING,
+      &config_file,
+      "Path to config file\n",
+      NULL
+    },
+    { NULL }
+  };
+
+  app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
+
+  gboolean camera_is_available = is_camera_available ();
+
+  gchar camera_description[255] = {};
+
+  if (camera_is_available) {
+    snprintf (camera_description, sizeof (camera_description),
+        "  If neither input-file nor rtsp-ip-port are provided, "
+        "then camera input will be selected\n\n");
+  }
+
+  snprintf (help_description, 4095, "\nExample:\n"
+      "  %s --config-file=%s\n"
+      "\nThis Sample App demonstrates Daisy chain of "
+      "Object Detection and Classification\n"
+      "\nConfig file Fields:\n"
+
+      "  input-file: \"/PATH\"\n"
+      "      Input File path\n"
+      "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
+      "      Use this parameter to provide the rtsp input.\n"
+      "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
+      "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
+      "  %s"
+      "  detection-model: \"/PATH\"\n"
+      "      This is an optional parameter and overrides default path "
+      "for YOLOX detection model\n"
+      "      Default path for YOLOX model: "DEFAULT_TFLITE_YOLOX_MODEL"\n"
+      "  detection-labels: \"/PATH\"\n"
+      "      This is an optional parameter and overrides default path "
+      " for YOLOX labels\n"
+      "      Default path for YOLOX labels: "DEFAULT_DETECTION_LABELS"\n"
+      "  classification-model: \"/PATH\"\n"
+      "      This is an optional parameter and overrides default path "
+      "for classification model\n"
+      "      Default path for Classification model: "
+      DEFAULT_TFLITE_CLASSIFICATION_MODEL"\n"
+      "  classification-labels: \"/PATH\"\n"
+      "      This is an optional parameter and overrides default path "
+      " for classification labels\n"
+      "      Default path for classification labels: "
+      DEFAULT_CLASSIFICATION_LABELS"\n"
+      "  enable-usb-camera: Use this Parameter to enable-usb-camera\n"
+      "      This can be either TRUE or FALSE.\n"
+      "  width: USB Camera Resolution width.\n"
+      "  height: USB Camera Resolution Height.\n"
+      "  framerate: USB Camera Frame Rate.\n"
+      "  video-format: USB Video Format format can be nv12, yuy2 or mjpeg\n"
+      "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
+      "  output-file: Use this Parameter to set output file path\n"
+      "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
+      "  output-ip-address: Use this parameter to provide the rtsp output address.\n"
+      "      eg: 127.0.0.1\n"
+      "      Default ip is:" DEFAULT_IP "\n"
+      "  port: Use this parameter to provide the rtsp output port.\n"
+      "      eg: 8900\n"
+      "      Default port is:" DEFAULT_PORT "\n"
+      "  classification-runtime: It can take cpu, gpu, dsp as input.\n"
+      "  detection-runtime: It can take cpu, gpu, dsp as input.\n",
+      app_name, DEFAULT_CONFIG_FILE, camera_description);
+  help_description[4095] = '\0';
+
+  // Parse command line entries.
+  if ((ctx = g_option_context_new (help_description)) != NULL) {
+    GError *error = NULL;
+    gboolean success = FALSE;
+
+    g_option_context_add_main_entries (ctx, entries, NULL);
+    g_option_context_add_group (ctx, gst_init_get_option_group ());
+
+    success = g_option_context_parse (ctx, &argc, &argv, &error);
+    g_option_context_free (ctx);
+
+    if (!success && (error != NULL)) {
+      g_printerr ("Failed to parse command line options: %s!\n",
+          GST_STR_NULL (error->message));
+      g_clear_error (&error);
+      gst_app_context_free (&appctx, &options, config_file);
+      return -EFAULT;
+    } else if (!success && (NULL == error)) {
+      g_printerr ("Initializing: Unknown error!\n");
+      gst_app_context_free (&appctx, &options, config_file);
+      return -EFAULT;
+    }
+  } else {
+    g_printerr ("Failed to create options context!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EFAULT;
+  }
+
+  if (config_file == NULL) {
+    config_file = DEFAULT_CONFIG_FILE;
+  }
+
+  if (!file_exists (config_file)) {
+    g_printerr ("Invalid config file path: %s\n", config_file);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if (parse_json (config_file, &options) != 0) {
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  // Check for input source
+  if (camera_is_available) {
+    g_print ("TARGET can support file source, RTSP source and camera source\n");
+  } else {
+    g_print ("TARGET can only support file source and RTSP source.\n");
+    if (options.file_path == NULL && options.rtsp_ip_port == NULL) {
+      g_print ("User need to give proper input as source\n");
+      gst_app_context_free (&appctx, &options, config_file);
+      return -EINVAL;
+    }
+  }
+
+  if ((options.camera_source && options.file_path) ||
+      (options.camera_source && options.rtsp_ip_port) ||
+      (options.file_path && options.rtsp_ip_port) ||
+      (options.camera_source && options.use_usb) ||
+      (options.use_usb && options.file_path) ||
+      (options.use_usb && options.rtsp_ip_port)) {
+    g_printerr ("Multiple sources are provided as input.\n"
+        "Select only one input source\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  } else if (options.camera_source) {
+    g_print ("Camera source is selected.\n");
+    options.source_type = GST_STREAM_TYPE_CAMERA;
+  } else if (options.file_path) {
+    g_print ("File source is selected.\n");
+    options.source_type = GST_STREAM_TYPE_FILE;
+  } else if (options.rtsp_ip_port) {
+    g_print ("RTSP source is selected.\n");
+    options.source_type = GST_STREAM_TYPE_RTSP;
+  }  else if (options.use_usb) {
+    g_print ("USB source is selected.\n");
+    options.source_type = GST_STREAM_TYPE_USB_CAMERA;
+  }else {
+    if (camera_is_available) {
+      g_print ("No source is selected. " "Camera is set as Default\n");
+      options.source_type = GST_STREAM_TYPE_CAMERA;
+    } else {
+      g_print ("User need to give proper input file as source\n");
+      gst_app_context_free (&appctx, &options, config_file);
+      return -EINVAL;
+    }
+  }
+
+  if (options.source_type == GST_STREAM_TYPE_FILE) {
+    if (!file_exists (options.file_path)) {
+      g_printerr ("Invalid video file source path: %s\n", options.file_path);
+      gst_app_context_free (&appctx, &options, config_file);
+      return -EINVAL;
+    }
+  }
+
+  if (options.detection_model_path == NULL) {
+    options.detection_model_path = DEFAULT_TFLITE_YOLOX_MODEL;
+  }
+  if (!file_exists (options.detection_model_path)) {
+    g_printerr ("Invalid detection model file path: %s\n",
+        options.detection_model_path);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if (options.classification_model_path == NULL) {
+    options.classification_model_path = DEFAULT_TFLITE_CLASSIFICATION_MODEL;
+  }
+  if (!file_exists (options.classification_model_path)) {
+    g_printerr ("Invalid classification model file path: %s\n",
+        options.classification_model_path);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if (options.detection_labels_path == NULL) {
+    options.detection_labels_path = DEFAULT_DETECTION_LABELS;
+  }
+  if (!file_exists (options.detection_labels_path)) {
+    g_printerr ("Invalid detection labels file path: %s\n",
+        options.detection_labels_path);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if (options.classification_labels_path == NULL) {
+    options.classification_labels_path = DEFAULT_CLASSIFICATION_LABELS;
+  }
+  if (!file_exists (options.classification_labels_path)) {
+    g_printerr ("Invalid classification labels file path: %s\n",
+        options.classification_labels_path);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if ((options.classification_use_cpu + options.classification_use_gpu +
+      options.classification_use_dsp) > 1) {
+    g_print ("Select any one runtime from CPU or GPU or DSP\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if ((options.detection_use_cpu + options.detection_use_gpu +
+      options.detection_use_dsp) > 1) {
+    g_print ("Select any one runtime from CPU or GPU or DSP\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  g_print ("Running app with\n"
+      "For Detection model: %s labels: %s\n"
+      "For Classification model: %s labels: %s\n",
+      options.detection_model_path, options.detection_labels_path,
+      options.classification_model_path, options.classification_labels_path);
+
+  // Initialize GST library.
+  gst_init (&argc, &argv);
+
+  // Create the pipeline that will form connection with other elements
+  pipeline = gst_pipeline_new (app_name);
+  if (!pipeline) {
+    g_printerr ("ERROR: failed to create pipeline.\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -1;
+  }
+
+  appctx.pipeline = pipeline;
+  if (options.use_usb == TRUE) {
+    ret = find_usb_camera_node (&options);
+    if (!ret) {
+      g_printerr ("\n Failed to find the USB camera.\n");
+      gst_app_context_free (&appctx, &options, config_file);
+      return -1;
+    }
+  }
+  // Build the pipeline, link all elements in the pipeline
+  ret = create_pipe (&appctx, options);
+  if (!ret) {
+    g_printerr ("ERROR: failed to create GST pipe.\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -1;
+  }
+
+  // Initialize main loop.
+  if ((mloop = g_main_loop_new (NULL, FALSE)) == NULL) {
+    g_printerr ("ERROR: Failed to create Main loop!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -1;
+  }
+  appctx.mloop = mloop;
+
+  // Retrieve reference to the pipeline's bus.
+  // Bus is message queue for getting callback from gstreamer pipeline
+  if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
+    g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return -1;
+  }
+
+  // Watch for messages on the pipeline's bus.
+  gst_bus_add_signal_watch (bus);
+
+  // Register respective callback function based on message
+  g_signal_connect (bus, "message::state-changed",
+      G_CALLBACK (state_changed_cb), pipeline);
+
+  g_signal_connect (bus, "message::error", G_CALLBACK (error_cb), mloop);
+  g_signal_connect (bus, "message::warning", G_CALLBACK (warning_cb), mloop);
+
+  g_signal_connect (bus, "message::eos", G_CALLBACK (eos_cb), mloop);
+  gst_object_unref (bus);
+
+  // Register function for handling interrupt signals with the main loop.
+  intrpt_watch_id =
+      g_unix_signal_add (SIGINT, handle_interrupt_signal, &appctx);
+
+  // On successful transition to PAUSED state, state_changed_cb is called.
+  // state_changed_cb callback is used to send pipeline to play state.
+  g_print ("Set pipeline to PAUSED state ...\n");
+  switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
+    case GST_STATE_CHANGE_FAILURE:
+      g_printerr ("ERROR: Failed to transition to PAUSED state!\n");
+      goto error;
+    case GST_STATE_CHANGE_NO_PREROLL:
+      g_print ("Pipeline is live and does not need PREROLL.\n");
+      break;
+    case GST_STATE_CHANGE_ASYNC:
+      g_print ("Pipeline is PREROLLING ...\n");
+      break;
+    case GST_STATE_CHANGE_SUCCESS:
+      g_print ("Pipeline state change was successful\n");
+      break;
+  }
+
+  // Wait till pipeline encounters an error or EOS
+  g_print ("g_main_loop_run\n");
+  g_main_loop_run (mloop);
+  g_print ("g_main_loop_run ends\n");
+
+error:
+  // Remove the interrupt signal handler
+  if (intrpt_watch_id)
+    g_source_remove (intrpt_watch_id);
+
+  g_print ("Set pipeline to NULL state ...\n");
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_app_context_free (&appctx, &options, config_file);
+
+  g_print ("gst_deinit\n");
+  gst_deinit ();
+
+  return 0;
+}
