@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """
 deploy_mode_c.py — Host-build a C app artifact on a Linux workstation,
 deploy the ARM64 binary to a QLI/Yocto device, and run it.

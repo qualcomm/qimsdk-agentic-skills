@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 gst-launch-1.0 -e --gst-debug=2 \
   qtimlvconverter name=stage_01_preproc \
   qtimltflite name=stage_01_inference delegate=external external-delegate-path=libQnnTFLiteDelegate.so \

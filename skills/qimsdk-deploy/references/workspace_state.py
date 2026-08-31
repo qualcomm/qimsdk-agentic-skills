@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """
 workspace_state.py — Detect workspace setup state for Mode B and Mode C.
 

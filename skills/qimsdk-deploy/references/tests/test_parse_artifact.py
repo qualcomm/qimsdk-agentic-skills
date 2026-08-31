@@ -1,5 +1,6 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """Regression tests for _parse_artifact source/output classification.
 
 Guards the fix for the false-positive "camera" match: a videotestsrc+filesink app

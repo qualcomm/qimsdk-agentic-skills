@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 gst-launch-1.0 -e --gst-debug=2 \
 qtimlvconverter name=class_pre \
 qtimltflite name=class_infer model=$HOME/models/$MODEL_NAME_1 delegate=external external-delegate-path=libQnnTFLiteDelegate.so external-delegate-options="QNNExternalDelegate,backend_type=htp,log_level=(string)1;" \

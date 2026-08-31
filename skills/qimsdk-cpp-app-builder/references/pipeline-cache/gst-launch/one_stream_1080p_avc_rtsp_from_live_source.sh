@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 ## 1. Start RTSP Server (in background or separate terminal)
 gst-rtsp-server -p 8900 -m /live "( udpsrc name=pay0 port=8554 caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\" )" &
 

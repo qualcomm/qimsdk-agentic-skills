@@ -1,3 +1,6 @@
+// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+// SPDX-License-Identifier: BSD-3-Clause-Clear
+
 // Event-triggered recording: YOLOX object detection on an MP4 file, with
 // display overlay, that starts recording an annotated MP4 output only while
 // a "person" is detected, and stops after a run of consecutive frames with

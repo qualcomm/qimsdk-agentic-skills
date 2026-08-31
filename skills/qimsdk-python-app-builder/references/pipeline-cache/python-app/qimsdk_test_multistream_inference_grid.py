@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """32-stream YOLOX object detection with per-stream (non-batched) inference
 composed into a dynamic grid, supporting display, MP4 file, or RTSP output."""
 

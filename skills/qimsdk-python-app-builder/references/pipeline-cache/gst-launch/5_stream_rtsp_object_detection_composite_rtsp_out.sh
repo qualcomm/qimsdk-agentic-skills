@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 #
 # 5-stream H.265 RTSP input → YOLOv8 object detection → 3×2 grid composite → RTSP re-stream
 #

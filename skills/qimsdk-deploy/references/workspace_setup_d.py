@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """
 workspace_setup_d.py — Idempotent Mode D workspace setup and standalone app build.
 

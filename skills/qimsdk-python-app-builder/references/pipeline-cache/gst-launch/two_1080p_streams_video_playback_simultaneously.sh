@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 # Run in separate consoles or combine with &
 gst-launch-1.0 -e -v \
   filesrc location=$HOME/media/video.mp4 ! \

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """
 deploy_mode_p.py — Deploy and run a QIM SDK Python app artifact on a Qualcomm Ubuntu device.
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """BM25 retrieval over the qimsdk-cpp-app-builder pipeline example indexes.
 
 This is a pure-Python (stdlib-only), deterministic, offline ranker. It does

@@ -1,5 +1,6 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """Regression tests for the additive --phase flag on deploy_mode_{c,d,p}.py.
 
 These are host-only (no device, no workstation) — they exercise the argparse

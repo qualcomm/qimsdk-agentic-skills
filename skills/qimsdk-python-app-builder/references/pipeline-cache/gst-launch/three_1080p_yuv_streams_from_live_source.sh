@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 gst-launch-1.0 -e -v \
   qtivcomposer name=mixer \
     sink_0::position="<0,0>"  sink_0::dimensions="<480,270>" \

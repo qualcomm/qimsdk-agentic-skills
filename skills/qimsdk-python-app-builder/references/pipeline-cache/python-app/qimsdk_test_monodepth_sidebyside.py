@@ -1,3 +1,6 @@
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """QIM SDK Python app: monocular depth estimation with side-by-side comparison display."""
 
 import os

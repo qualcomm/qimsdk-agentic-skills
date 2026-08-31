@@ -1,3 +1,6 @@
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 """QIM SDK Python app: YOLOv8 object-detection metadata parser from an mp4-file source.
 
 Runs YOLOv8 detection on an mp4-file, renders the overlay on a wayland display,

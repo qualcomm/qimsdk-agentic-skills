@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 # verify-gst-launch.sh — QIM SDK gst-launch artifact verification
 #
 # Usage: bash verify-gst-launch.sh <path/to/pipeline.sh>

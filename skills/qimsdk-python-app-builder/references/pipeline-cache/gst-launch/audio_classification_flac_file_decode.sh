@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
 gst-launch-1.0 -e filesrc location=$HOME/media/$SRC_VIDEO_NAME ! qtdemux name=demux demux. ! queue ! h264parse ! \
 v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw, format=NV12 ! qtivcomposer name=mixer sink_1::position="<50, 50>" sink_1::dimensions="<368, 64>" ! \
 queue ! waylandsink fullscreen=true demux. ! queue ! flacparse ! flacdec ! queue ! audioconvert ! audioresample ! \
