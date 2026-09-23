@@ -182,7 +182,23 @@ def check_python():
 # ── Python dependencies ───────────────────────────────────────────────────────
 
 def install_requirements(requirements_path):
-    """Auto-install Python deps. Returns (ok, message)."""
+    """Auto-install Python deps. Returns (ok, message).
+
+    Skips the pip call entirely if the required packages already import —
+    avoids failing on Linux distros with an externally-managed Python
+    environment (PEP 668, e.g. Ubuntu 23.04+), where pip refuses to install
+    system-wide without --break-system-packages even for a package that's
+    already present via apt. If a real install is needed, this still runs
+    plain pip (no extra flags) so a genuinely externally-managed environment
+    surfaces its own actionable error instead of being silently overridden.
+    """
+    try:
+        import paramiko  # noqa: F401
+        import yaml  # noqa: F401
+        return True, 'paramiko and pyyaml already importable — skipped pip install'
+    except ImportError:
+        pass
+
     if not requirements_path.exists():
         return False, (
             f'requirements.txt not found at {requirements_path}.'
