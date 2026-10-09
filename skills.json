@@ -1,0 +1,153 @@
+{
+  "manifestVersion": 1,
+  "skills": [
+    {
+      "name": "qimsdk-gstreamer-app-builder",
+      "displayName": "QIM SDK GStreamer App Builder",
+      "description": "Build, debug, and package QIM SDK GStreamer native pipelines and C applications for AI and multimedia workflows.",
+      "category": "devtools",
+      "owner": "qimsdk",
+      "tags": [
+        "qimsdk",
+        "ai",
+        "multimedia",
+        "pipeline",
+        "c",
+        "gst-launch"
+      ],
+      "agents": [
+        "claude",
+        "codex"
+      ],
+      "license": "BSD-3-Clause-Clear",
+      "homepage": "https://imsdkdocs.qualcomm.com/app-builder-coding-agent",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "skills/qimsdk-gstreamer-app-builder",
+          "docPath": "skills/qimsdk-gstreamer-app-builder/SKILL.md",
+          "files": [
+            "skills/qimsdk-gstreamer-app-builder/**"
+          ],
+          "compatibility": {
+            "devkits": [
+              "qcs9075-iq-9075-evk"
+            ],
+            "hostOs": ["linux", "windows"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "qimsdk-cpp-app-builder",
+      "displayName": "QIM SDK C++ App Builder",
+      "description": "Build QIM SDK C++ applications and AI or multimedia pipelines using documented SDK APIs.",
+      "category": "devtools",
+      "owner": "qimsdk",
+      "tags": [
+        "qimsdk",
+        "ai",
+        "multimedia",
+        "pipeline",
+        "cpp"
+      ],
+      "agents": [
+        "claude",
+        "codex"
+      ],
+      "license": "BSD-3-Clause-Clear",
+      "homepage": "https://imsdkdocs.qualcomm.com/app-builder-coding-agent",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "skills/qimsdk-cpp-app-builder",
+          "docPath": "skills/qimsdk-cpp-app-builder/SKILL.md",
+          "files": [
+            "skills/qimsdk-cpp-app-builder/**"
+          ],
+          "compatibility": {
+            "devkits": [
+              "qcs9075-iq-9075-evk"
+            ],
+            "hostOs": ["linux", "windows"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "qimsdk-python-app-builder",
+      "displayName": "QIM SDK Python App Builder",
+      "description": "Build QIM SDK Python applications and AI or multimedia pipelines using the qimsdk package.",
+      "category": "devtools",
+      "owner": "qimsdk",
+      "tags": [
+        "qimsdk",
+        "ai",
+        "multimedia",
+        "pipeline",
+        "python"
+      ],
+      "agents": [
+        "claude",
+        "codex"
+      ],
+      "license": "BSD-3-Clause-Clear",
+      "homepage": "https://imsdkdocs.qualcomm.com/app-builder-coding-agent",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "skills/qimsdk-python-app-builder",
+          "docPath": "skills/qimsdk-python-app-builder/SKILL.md",
+          "files": [
+            "skills/qimsdk-python-app-builder/**"
+          ],
+          "compatibility": {
+            "devkits": [
+              "qcs9075-iq-9075-evk"
+            ],
+            "hostOs": ["linux", "windows"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "qimsdk-deploy",
+      "displayName": "QIM SDK Deploy",
+      "description": "Build, deploy, run, and verify QIM SDK applications and plugins on Qualcomm Linux devices.",
+      "category": "devtools",
+      "owner": "qimsdk",
+      "tags": [
+        "qimsdk",
+        "deploy",
+        "ssh",
+        "qualcomm-linux",
+        "build",
+        "run",
+        "device"
+      ],
+      "agents": [
+        "claude",
+        "codex"
+      ],
+      "license": "BSD-3-Clause-Clear",
+      "homepage": "https://imsdkdocs.qualcomm.com/app-builder-coding-agent",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "skills/qimsdk-deploy",
+          "docPath": "skills/qimsdk-deploy/SKILL.md",
+          "files": [
+            "skills/qimsdk-deploy/**"
+          ],
+          "compatibility": {
+            "devkits": [
+              "qcs9075-iq-9075-evk"
+            ],
+            "hostOs": ["linux", "windows"]
+          }
+        }
+      ]
+    }
+  ],
+  "sources": []
+}
