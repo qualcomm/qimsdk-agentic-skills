@@ -1,0 +1,17 @@
+{
+  "name": "qimsdk-marketplace",
+  "description": "QIM SDK Agentic Skills.",
+  "owner": {
+    "name": "Qualcomm"
+  },
+  "plugins": [
+    {
+      "name": "qimsdk-agentic-skills",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/qualcomm/qimsdk-agentic-skills.git"
+      },
+      "description": "QIM SDK agentic skills for GStreamer, C++, and Python app generation plus on-device deployment on Qualcomm Linux platforms."
+    }
+  ]
+}
