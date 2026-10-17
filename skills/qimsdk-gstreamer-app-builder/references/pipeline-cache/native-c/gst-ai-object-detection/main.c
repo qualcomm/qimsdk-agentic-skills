@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -58,23 +60,23 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_SNPE_YOLOV5_MODEL "/etc/models/yolov5.dlc"
-#define DEFAULT_SNPE_YOLOV8_MODEL "/etc/models/yolov8.dlc"
-#define DEFAULT_SNPE_YOLONAS_MODEL "/etc/models/yolonas.dlc"
-#define DEFAULT_SNPE_YOLOX_MODEL "/etc/models/yolox.dlc"
-#define DEFAULT_TFLITE_YOLOV8_MODEL "/etc/models/yolov8_det_quantized.tflite"
-#define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
-#define DEFAULT_TFLITE_YOLOV5_MODEL "/etc/models/yolov5.tflite"
-#define DEFAULT_TFLITE_YOLONAS_MODEL "/etc/models/yolonas_quantized.tflite"
-#define DEFAULT_TFLITE_YOLOV7_MODEL "/etc/models/Yolo-v7-Quantized.tflite"
-#define DEFAULT_QNN_YOLOV8_MODEL "/etc/models/yolov8_det_quantized.bin"
-#define DEFAULT_QNN_YOLOX_MODEL "/etc/models/yolox_quantized.bin"
-#define DEFAULT_ONNX_YOLOX_MODEL "/etc/models/yolox.onnx"
-#define DEFAULT_YOLOV5_LABELS "/etc/labels/yolov5.json"
-#define DEFAULT_YOLOV8_LABELS "/etc/labels/yolov8.json"
-#define DEFAULT_YOLOX_LABELS "/etc/labels/yolox.json"
-#define DEFAULT_YOLONAS_LABELS "/etc/labels/yolonas.json"
-#define DEFAULT_YOLOV7_LABELS "/etc/labels/yolov7.json"
+#define DEFAULT_SNPE_YOLOV5_MODEL "yolov5.dlc"
+#define DEFAULT_SNPE_YOLOV8_MODEL "yolov8.dlc"
+#define DEFAULT_SNPE_YOLONAS_MODEL "yolonas.dlc"
+#define DEFAULT_SNPE_YOLOX_MODEL "yolox.dlc"
+#define DEFAULT_TFLITE_YOLOV8_MODEL "yolov8_det_quantized.tflite"
+#define DEFAULT_TFLITE_YOLOX_MODEL "yolox_quantized.tflite"
+#define DEFAULT_TFLITE_YOLOV5_MODEL "yolov5.tflite"
+#define DEFAULT_TFLITE_YOLONAS_MODEL "yolonas_quantized.tflite"
+#define DEFAULT_TFLITE_YOLOV7_MODEL "Yolo-v7-Quantized.tflite"
+#define DEFAULT_QNN_YOLOV8_MODEL "yolov8_det_quantized.bin"
+#define DEFAULT_QNN_YOLOX_MODEL "yolox_quantized.bin"
+#define DEFAULT_ONNX_YOLOX_MODEL "yolox.onnx"
+#define DEFAULT_YOLOV5_LABELS "yolov5.json"
+#define DEFAULT_YOLOV8_LABELS "yolov8.json"
+#define DEFAULT_YOLOX_LABELS "yolox.json"
+#define DEFAULT_YOLONAS_LABELS "yolonas.json"
+#define DEFAULT_YOLOV7_LABELS "yolov7.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -91,7 +93,7 @@
 #define USB_CAMERA_OUTPUT_WIDTH 1280
 #define USB_CAMERA_OUTPUT_HEIGHT 720
 #define DEFAULT_CAMERA_FRAME_RATE 30
-#define DEFAULT_OUTPUT_FILENAME "/etc/media/output_object_detection.mp4"
+#define DEFAULT_OUTPUT_FILENAME "output_object_detection.mp4"
 #define DEFAULT_IP "127.0.0.1"
 #define DEFAULT_PORT "8900"
 #define MAX_VID_DEV_CNT 64
@@ -99,7 +101,7 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config_detection.json"
+#define DEFAULT_CONFIG_FILE "config_detection.json"
 
 /**
  * Number of Queues used for buffer caching between elements
@@ -127,6 +129,7 @@ typedef struct {
   gchar *output_file;
   gchar *output_ip_address;
   gchar *port_num;
+  gchar *artifacts_dir;
   gchar *enable_usb_camera;
   gchar dev_video[16];
   enum GstSinkType sinktype;
@@ -157,8 +160,8 @@ typedef struct {
  * @param appctx Application Context object
  */
 static void
-gst_app_context_free
-(GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
+  gchar * config_file)
 {
   // If specific pointer is not NULL, unref it
   if (appctx->mloop != NULL) {
@@ -174,28 +177,11 @@ gst_app_context_free
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *)(&DEFAULT_SNPE_YOLOV5_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_SNPE_YOLOV8_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_SNPE_YOLONAS_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_SNPE_YOLOX_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLOV8_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLOX_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLOV5_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLONAS_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLOV7_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_QNN_YOLOV8_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_QNN_YOLOX_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_ONNX_YOLOX_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer)options->model_path);
   }
 
-  if (options->labels_path != (gchar *)(&DEFAULT_YOLOV5_LABELS) &&
-      options->labels_path != (gchar *)(&DEFAULT_YOLOV8_LABELS) &&
-      options->labels_path != (gchar *)(&DEFAULT_YOLOX_LABELS) &&
-      options->labels_path != (gchar *)(&DEFAULT_YOLONAS_LABELS) &&
-      options->labels_path != (gchar *)(&DEFAULT_YOLOV7_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer)options->labels_path);
   }
 
@@ -206,8 +192,7 @@ gst_app_context_free
     g_free ((gpointer)options->snpe_tensors);
   }
 
-  if (options->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME) &&
-      options->output_file != NULL) {
+  if (options->output_file != NULL) {
     g_free ((gpointer)options->output_file);
   }
 
@@ -221,10 +206,12 @@ gst_app_context_free
     g_free ((gpointer)options->port_num);
   }
 
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+  if (config_file != NULL) {
     g_free ((gpointer)config_file);
-    config_file = NULL;
+  }
+
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer)options->artifacts_dir);
   }
 
   if (appctx->pipeline != NULL) {
@@ -1084,13 +1071,11 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     goto error_clean_elements;
   }
 
-  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer
   pad_filter = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "RGBA", NULL);
+      "format", G_TYPE_STRING, "RGBA",
+      "width", G_TYPE_INT, 640,
+      "height", G_TYPE_INT, 360, NULL);
 
   g_object_set (G_OBJECT (detection_filter), "caps", pad_filter, NULL);
   gst_caps_unref (pad_filter);
@@ -1359,13 +1344,18 @@ error_clean_elements:
  * @param options Application specific options
  */
 gint
-parse_json (gchar * config_file, GstAppOptions * options)
+parse_json (gchar * config_file,
+  GstAppOptions * options)
 {
   JsonParser *parser = NULL;
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   JsonArray *snpe_tensors = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *output_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -1396,8 +1386,19 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -1461,19 +1462,52 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "output-file")) {
-    options->output_file =
-        g_strdup (json_object_get_string_member (root_obj, "output-file"));
+    output_filename =
+        json_object_get_string_member (root_obj, "output-file");
+    if (g_path_is_absolute (output_filename)) {
+      options->output_file = g_strdup (output_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->output_file =
+          g_build_filename (options->artifacts_dir, "media", output_filename, NULL);
+    }
     g_print ("Output File Name : %s\n", options->output_file);
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "threshold")) {
@@ -1592,8 +1626,14 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = {};
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *labels_filename = NULL;
 
   // set default value
+  home_dir = g_getenv("HOME");
+
+  options.artifacts_dir = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
   options.use_cpu = FALSE, options.use_gpu = FALSE, options.use_dsp = FALSE;
@@ -1612,7 +1652,7 @@ main (gint argc, gchar * argv[])
   options.height = USB_CAMERA_OUTPUT_HEIGHT;
   options.video_format = GST_NV12_VIDEO_FORMAT;
   options.sinktype = GST_WAYLANDSINK;
-  options.output_file = DEFAULT_OUTPUT_FILENAME;
+  options.output_file = NULL;
   options.output_ip_address = DEFAULT_IP;
   options.port_num = DEFAULT_PORT;
   options.framerate = DEFAULT_CAMERA_FRAME_RATE;
@@ -1648,9 +1688,12 @@ main (gint argc, gchar * argv[])
       "  %s --config-file=%s\n"
       "\nThis Sample App demonstrates Object Detection on Input Stream\n"
       "\nConfig file Fields:\n"
-      "  %s"
+      "  %s\n"
       "  file-path: \"/PATH\"\n"
-      "      File source path\n"
+      "      Path to the input media file.\n"
+      "      The media file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
       "      Use this parameter to provide the rtsp input.\n"
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
@@ -1663,12 +1706,12 @@ main (gint argc, gchar * argv[])
       "  ml-framework: \"snpe\" or \"tflite\" or \"onnx\" or \"qnn\"\n"
       "      Execute Model in TFlite[default], snpe, onnx or qnn format\n"
       "  model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for YOLOV5 DLC: "DEFAULT_SNPE_YOLOV5_MODEL"\n"
-      "      Default model path for YOLOV8 DLC: "DEFAULT_SNPE_YOLOV8_MODEL"\n"
-      "      Default model path for YOLO NAS DLC: "DEFAULT_SNPE_YOLONAS_MODEL"\n"
-      "      Default model path for YOLOX DLC: "DEFAULT_SNPE_YOLOX_MODEL"\n"
-      "      Default model path for YOLOV5 TFLITE: "
+      "      Path to the model file.\n"
+      "      Default model file for YOLOV5 DLC: "DEFAULT_SNPE_YOLOV5_MODEL"\n"
+      "      Default model file for YOLOV8 DLC: "DEFAULT_SNPE_YOLOV8_MODEL"\n"
+      "      Default model file for YOLO NAS DLC: "DEFAULT_SNPE_YOLONAS_MODEL"\n"
+      "      Default model file for YOLOX DLC: "DEFAULT_SNPE_YOLOX_MODEL"\n"
+      "      Default model file for YOLOV5 TFLITE: "
       DEFAULT_TFLITE_YOLOV5_MODEL"\n"
       "      Default model path for YOLOV8 TFLITE: "
       DEFAULT_TFLITE_YOLOV8_MODEL"\n"
@@ -1684,19 +1727,27 @@ main (gint argc, gchar * argv[])
       DEFAULT_QNN_YOLOX_MODEL"\n"
       "      Default model path for YOLOX ONNX: "
       DEFAULT_ONNX_YOLOX_MODEL"\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  labels: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default labels path for YOLOV5: "DEFAULT_YOLOV5_LABELS"\n"
-      "      Default labels path for YOLOV8: "DEFAULT_YOLOV8_LABELS"\n"
-      "      Default labels path for YOLOX: "DEFAULT_YOLOX_LABELS"\n"
-      "      Default labels path for YOLO NAS: "DEFAULT_YOLONAS_LABELS"\n"
-      "      Default labels path for YOLOV7: "DEFAULT_YOLOV7_LABELS"\n"
+      "      Path to the label file.\n"
+      "      Default labels file for YOLOV5: "DEFAULT_YOLOV5_LABELS"\n"
+      "      Default labels file for YOLOV8: "DEFAULT_YOLOV8_LABELS"\n"
+      "      Default labels file for YOLOX: "DEFAULT_YOLOX_LABELS"\n"
+      "      Default labels file for YOLO NAS: "DEFAULT_YOLONAS_LABELS"\n"
+      "      Default labels file for YOLOV7: "DEFAULT_YOLOV7_LABELS"\n"
+      "      The label file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  threshold: 0 to 100\n"
       "      This is an optional parameter and overides "
       "default threshold value 40\n"
       "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
-      "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
+      "      Default output file path is:\n"
+      "       $HOME/Downloads/qimsdk_samples/media/"DEFAULT_OUTPUT_FILENAME"\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  video-format: Video Type format can be nv12, yuy2 or mjpeg\n"
       "      It is applicable only for USB Camera Source\n"
       "  width: USB Camera Resolution width\n"
@@ -1745,8 +1796,21 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -1755,9 +1819,18 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
+  options.artifacts_dir = g_build_filename(home_dir,
+    "Downloads", "qimsdk_samples", NULL);
+
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
+  }
+
+  if (options.output_file == NULL && options.sinktype == GST_VIDEO_ENCODE) {
+    options.output_file =
+        g_build_filename (options.artifacts_dir, "media",
+          DEFAULT_OUTPUT_FILENAME, NULL);
   }
 
   // Check for input source
@@ -1893,7 +1966,7 @@ main (gint argc, gchar * argv[])
   // Set model path for execution
   if (options.model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_SNPE) {
-      options.model_path =
+      model_filename =
           (options.yolo_model_type == GST_YOLO_TYPE_V5 ?
           DEFAULT_SNPE_YOLOV5_MODEL :
           (options.yolo_model_type == GST_YOLO_TYPE_V8 ?
@@ -1901,33 +1974,43 @@ main (gint argc, gchar * argv[])
           (options.yolo_model_type == GST_YOLO_TYPE_NAS ?
           DEFAULT_SNPE_YOLONAS_MODEL :
           DEFAULT_SNPE_YOLOX_MODEL)));
+      options.model_path =
+          g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
     } else if (options.model_type == GST_MODEL_TYPE_TFLITE) {
-      if (options.yolo_model_type == GST_YOLO_TYPE_V5) {
-        options.model_path = DEFAULT_TFLITE_YOLOV5_MODEL;
+        if (options.yolo_model_type == GST_YOLO_TYPE_V5) {
+        model_filename = DEFAULT_TFLITE_YOLOV5_MODEL;
       } else if (options.yolo_model_type == GST_YOLO_TYPE_NAS) {
-        options.model_path = DEFAULT_TFLITE_YOLONAS_MODEL;
+        model_filename = DEFAULT_TFLITE_YOLONAS_MODEL;
       } else if (options.yolo_model_type == GST_YOLO_TYPE_V7) {
-        options.model_path = DEFAULT_TFLITE_YOLOV7_MODEL;
+        model_filename = DEFAULT_TFLITE_YOLOV7_MODEL;
       } else if (options.yolo_model_type == GST_YOLO_TYPE_V8) {
-        options.model_path = DEFAULT_TFLITE_YOLOV8_MODEL;
+        model_filename = DEFAULT_TFLITE_YOLOV8_MODEL;
       } else {
         g_print ("No tflite model provided, Using default Yolox Model\n");
-        options.model_path = DEFAULT_TFLITE_YOLOX_MODEL;
+        model_filename = DEFAULT_TFLITE_YOLOX_MODEL;
         options.yolo_model_type = GST_YOLO_TYPE_X;
       }
+      options.model_path =
+          g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
     } else if (options.model_type == GST_MODEL_TYPE_QNN) {
-      if (options.yolo_model_type == GST_YOLO_TYPE_V8) {
-        options.model_path = DEFAULT_QNN_YOLOV8_MODEL;
+        if (options.yolo_model_type == GST_YOLO_TYPE_V8) {
+        model_filename = DEFAULT_QNN_YOLOV8_MODEL;
       } else if (options.yolo_model_type == GST_YOLO_TYPE_X) {
-        options.model_path = DEFAULT_QNN_YOLOX_MODEL;
+        model_filename = DEFAULT_QNN_YOLOX_MODEL;
       } else {
         g_printerr ("Only YOLOV8 and Yolox model is supported with QNN runtime\n");
         gst_app_context_free (&appctx, &options, config_file);
         return -EINVAL;
       }
+      options.model_path =
+          g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
     } else if (options.model_type == GST_MODEL_TYPE_ONNX) {
       if (options.yolo_model_type == GST_YOLO_TYPE_X) {
-        options.model_path = DEFAULT_ONNX_YOLOX_MODEL;
+        options.model_path =
+            g_build_filename (options.artifacts_dir,
+              "models",
+              DEFAULT_ONNX_YOLOX_MODEL,
+              NULL);
       } else {
         g_printerr ("Only Yolox model is supported with onnx runtime\n");
         gst_app_context_free (&appctx, &options, config_file);
@@ -1941,12 +2024,14 @@ main (gint argc, gchar * argv[])
   }
   // Set default label path for execution
   if (options.labels_path == NULL) {
-    options.labels_path =
+    labels_filename =
         (options.yolo_model_type == GST_YOLO_TYPE_V5 ? DEFAULT_YOLOV5_LABELS :
         (options.yolo_model_type == GST_YOLO_TYPE_V8 ? DEFAULT_YOLOV8_LABELS :
         (options.yolo_model_type == GST_YOLO_TYPE_V7 ? DEFAULT_YOLOV7_LABELS :
         (options.yolo_model_type == GST_YOLO_TYPE_X ? DEFAULT_YOLOX_LABELS :
         DEFAULT_YOLONAS_LABELS))));
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels", labels_filename, NULL);
   }
 
   if (!file_exists (options.model_path)) {

@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
  * Application:
@@ -24,6 +26,8 @@
 #include <glib-unix.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <stdbool.h>
 
 #include <gst/gst.h>
@@ -322,8 +326,39 @@ create_pipe (GstCameraSwitchCtx *cameraswitchctx)
 
     g_object_set (G_OBJECT (h264parse), "name", "h264parse", NULL);
     g_object_set (G_OBJECT (mp4mux), "name", "mp4mux", NULL);
+    gchar *media_dir = NULL;
+    gchar *output_path = NULL;
+    const gchar *home_dir = g_get_home_dir ();
+
+    if (home_dir == NULL || home_dir[0] == '\0') {
+      g_printerr ("Failed to resolve the HOME directory.\n");
+      return FALSE;
+    }
+
+    media_dir = g_build_filename (home_dir, "Downloads", "qimsdk_samples",
+        "media", NULL);
+    if (media_dir == NULL) {
+      g_printerr ("Failed to allocate the default media directory path.\n");
+      return FALSE;
+    }
+
+    if (g_mkdir_with_parents (media_dir, 0755) != 0) {
+      g_printerr ("Failed to create media directory '%s': %s\n", media_dir,
+          g_strerror (errno));
+      g_free (media_dir);
+      return FALSE;
+    }
+
+    output_path = g_build_filename (media_dir, "mux.mp4", NULL);
+    g_free (media_dir);
+    if (output_path == NULL) {
+      g_printerr ("Failed to allocate the default output file path.\n");
+      return FALSE;
+    }
+
     g_object_set (G_OBJECT (filesink), "name", "filesink", NULL);
-    g_object_set (G_OBJECT (filesink), "location", "/etc/media/mux.mp4", NULL);
+    g_object_set (G_OBJECT (filesink), "location", output_path, NULL);
+    g_free (output_path);
     g_object_set (G_OBJECT (filesink), "enable-last-sample", false, NULL);
 
     // Add qmmfsrc to the pipeline

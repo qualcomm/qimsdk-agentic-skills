@@ -56,7 +56,7 @@ cam = pipeline.get("source", CamSrc)
 cam.image_capture()
 ```
 
-`.prepare()` moves the pipeline to PAUSED, `.activate()` is equivalent to `.start()`, and `.deactivate()` moves an already-started pipeline back to PAUSED. `.print()` logs the resolved topology through IMSDK logging, and `.generate_graph(filename)` writes a draw.io XML graph. Default generated apps still use `pipeline.execute()` unless the user asks for staged lifecycle or debug graph output.
+`.prepare()` moves the pipeline to PAUSED, `.activate()` is equivalent to `.start()`, and `.deactivate()` moves an already-started pipeline back to PAUSED. `.print()` logs the resolved topology through IMSDK logging, and `.generate_graph(filename)` writes a GraphViz `.dot` graph of the resolved GStreamer topology, not draw.io XML. Default generated apps still use `pipeline.execute()` unless the user asks for staged lifecycle or debug graph output.
 
 ## Element
 
@@ -125,11 +125,26 @@ never set `sink_1::position`/`sink_1::dimensions` as element-level properties on
 the composer — that raises `Unknown property 'sink-1::position'`. Only the
 `.input(N).set("position"/"dimensions", [...])` pad form works.
 
+**General rule — `GstValueArray`-typed properties take a Python list, not a
+gst-launch string, on any element.** Composer `position`/`dimensions` above is
+one instance of a wider pattern: whenever a property's type is `GstValueArray`
+(check `plugin-catalog.md` for which properties on a given element are
+array-typed — for example `qtimlqnn`/`qtimlsnpe`'s `tensors` output-tensor
+filter), set it with `Element.set(name, [item1, item2, ...])`. Never pass the
+gst-launch angle-bracket string form (`"<item1,item2>"`) to Python. The qimsdk
+Python wrapper treats a plain string argument as an iterable of characters,
+not as a single array value, and silently constructs a one-character-per-entry
+array instead of raising an error — there is no exception to signal the
+mistake. This conversion rule holds across every current and future
+`GstValueArray` property; it is not specific to one element or one model.
+
 ## Filters
 
 Use filter objects with `Pipeline.add_stream_filter(...)`, never `Pipeline.add(...)`.
 
 Generated apps should always use the named form. Do not use the one-argument form, because multiple filters of the same type can collide on default element names such as `textfilter`.
+
+**Never include a filter object (`VideoFilter`, `TextFilter`, `TensorFilter`, `ImageFilter`, `H264Filter`, `AudioFilter`) in a tuple/list/loop of plain `Element`s passed to `pipeline.add(...)`.** `pipeline.add()` expects an `Element` or a factory-name string; passing it a filter object raises `TypeError: Must be string, not VideoFilter` (or the equivalent for other filter types) and crashes pipeline construction before any element is created. When building a pipeline from element and filter collections, add every filter through its own `pipeline.add_stream_filter(name, filter_obj)` call, kept in a separate collection from the plain-`Element` objects passed to `pipeline.add(...)`.
 
 If the filter appears in `pipeline.link(...)`, the link name must match the `add_stream_filter(...)` name.
 
@@ -192,11 +207,11 @@ Additional `AppSrc` methods:
 
 - `AppSrc.Format`: `DEFAULT`, `BYTES`, `TIME`, `BUFFERS`, `PERCENT`
 - `.set_caps(caps)` accepts a stream filter, caps string, or raw caps object
-- `.push_buffer(buffer: Buffer) -> bool` — consumes the wrapper (`take_gst_buffer()`); to relay a buffer received in an `AppSink` consumer, push a copy: `AppSrc.push_buffer(Buffer(gst_buffer=received.take_gst_buffer().copy()))`.
+- `.push_buffer(buffer: Buffer) -> bool` — consumes the wrapper through the new raw-buffer ownership path; to relay a buffer received in an `AppSink` consumer, construct a copied wrapper with `Buffer(gst_buffer=received.get_raw_buffer().copy())` when the destination requires an independent reference.
 - `.end_of_stream()`
 - For a resident/relay `AppSrc` (e.g. cross-pipeline event recording), set element properties `format=3` (GST_FORMAT_TIME), `is-live=True`, and `do-timestamp=True`, and give it **fully-fixed** caps (`VideoFilter().format("NV12").resolution(W,H).framerate(FPS)`). `is-live` lets the recording pipeline finish preroll without data so it can be held PLAYING and fed only when gated on. See the event-recording pattern in `ai-pipeline-patterns.md`.
 
-`Buffer` wraps a `GstBuffer` for reading, writing, and timestamping data. Confirmed helpers include `.data()`, `.size()`, `.set_pts(...)`, `.set_dts(...)`, `.set_duration(...)`, `.pts`, `.dts`, `.duration`, `.is_writable()`, `.is_readonly()`, and `.valid()`. **`.data()` maps the buffer for reading and returns a `memoryview` of the payload bytes** (or `None`) — read a metadata/text payload in an `AppSink` consumer with `raw = bytes(buf.data()); text = raw.split(b"\x00", 1)[0].decode("utf-8", "ignore")`. Construct a wrapper around an existing GstBuffer with `Buffer(gst_buffer=<gstbuffer>)`.
+`Buffer` wraps a `GstBuffer` for reading, writing, and timestamping data. Confirmed helpers include `.data()`, `.size()`, `.resize(...)`, `.pts`, `.dts`, `.duration`, `.is_writable()`, `.is_readonly()`, `.make_writable()`, and `.valid()`. Timestamp properties are readable and writable; use `buf.pts = ...`, `buf.dts = ...`, and `buf.duration = ...` rather than the removed setter methods. **`.data()` maps the buffer for reading and returns a `memoryview` of the payload bytes** (or `None`) — read a metadata/text payload in an `AppSink` consumer with `raw = bytes(buf.data()); text = raw.split(b"\x00", 1)[0].decode("utf-8", "ignore")`. Construct a wrapper around an existing GstBuffer with `Buffer(gst_buffer=<gstbuffer>)`; transfer ownership with `get_raw_buffer()` when calling `AppSrc.push_buffer(...)`. `make_writable()` may replace the underlying GstBuffer, so reacquire any prior data view afterward.
 
 ## Camera Helpers
 
@@ -288,6 +303,19 @@ Use staged lifecycle only when requested:
 pipeline.start()
 pipeline.wait()
 pipeline.stop()
+```
+
+`pipeline.start()` returns immediately; it does not block until the pipeline stops. If `main()` has no later blocking call, the process exits right after `start()` returns, tearing down the pipeline (and any background thread) before it produces output. Every call to `start()` must be paired with a blocking call on the same thread: `pipeline.wait()`, `pipeline.stop().wait()`, or (for the default lifecycle) `pipeline.execute()` itself.
+
+This matters most for a finite/timed capture: a background thread that sleeps N seconds then calls `pipeline.stop()` only gets to run if something on the main thread is still blocking when that timer fires. Use `pipeline.execute()` as that blocking call rather than a bare `pipeline.start()`, for example:
+
+```python
+def stop_after_capture() -> None:
+    time.sleep(CAPTURE_SECONDS)
+    pipeline.stop().wait()
+
+threading.Thread(target=stop_after_capture, daemon=True).start()
+pipeline.execute()
 ```
 
 For file/mux outputs:

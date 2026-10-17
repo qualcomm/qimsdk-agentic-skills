@@ -10,8 +10,8 @@ output for the same query + index contents. It exists so a skill/agent can
 ground a natural-language request ("detect objects from a usb camera") in
 the two example corpora shipped alongside this skill:
 
-    skills/qimsdk-gstreamer-app-builder/references/pipeline-index.gst-launch.jsonl  (gst-launch/*.sh one-liners)
-    skills/qimsdk-gstreamer-app-builder/references/pipeline-index.native-c.jsonl    (native-c/<app-dir> C apps)
+    skills/prod/qimsdk-gstreamer-app-builder/references/pipeline-index.gst-launch.jsonl  (gst-launch/*.sh one-liners)
+    skills/prod/qimsdk-gstreamer-app-builder/references/pipeline-index.native-c.jsonl    (native-c/<app-dir> C apps)
 
 Each line in those files is a JSON object: {"prompt": "<nl description>",
 "path": "gst-launch/<slug>.sh"} or {"prompt": "...", "path": "native-c/<dir>"}.
@@ -62,7 +62,7 @@ Every hit carries two scores:
 
 INDEX CACHING
 The two .jsonl files are tokenized once and cached to
-    skills/qimsdk-gstreamer-app-builder/references/pipeline-cache/.index-cache.json
+    skills/prod/qimsdk-gstreamer-app-builder/references/pipeline-cache/.index-cache.json
 keyed on a hash of (INDEX_CACHE_VERSION, mtime of both .jsonl files). If the
 cache is missing, corrupt, or stale, it is silently rebuilt -- this script
 never crashes because of the cache. The cache write is atomic (tempfile in

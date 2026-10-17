@@ -6,3 +6,4 @@
   "ApplicationIcon": "",
   "ApplicationTextDescription": "This application Demonstrates WebRTC video streaming over network. It comunicates with the signaling server in order to do a registration and receive unique ID. With that ID the other peers can connet and start the streaming."
 }
+

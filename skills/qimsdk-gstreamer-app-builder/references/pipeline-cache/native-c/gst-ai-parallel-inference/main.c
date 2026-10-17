@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -54,23 +56,23 @@
  * Default models path and labels path
  */
 #define DEFAULT_TFLITE_OBJECT_DETECTION_MODEL \
-    "/etc/models/yolox_quantized.tflite"
-#define DEFAULT_OBJECT_DETECTION_LABELS "/etc/labels/yolox.json"
+    "yolox_quantized.tflite"
+#define DEFAULT_OBJECT_DETECTION_LABELS "yolox.json"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
-    "/etc/models/inception_v3_quantized.tflite"
-#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.json"
+    "inception_v3_quantized.tflite"
+#define DEFAULT_CLASSIFICATION_LABELS "classification.json"
 #define DEFAULT_TFLITE_POSE_DETECTION_MODEL \
-    "/etc/models/hrnet_pose_quantized.tflite"
-#define DEFAULT_POSE_DETECTION_LABELS "/etc/labels/hrnet_pose.json"
+    "hrnet_pose_quantized.tflite"
+#define DEFAULT_POSE_DETECTION_LABELS "hrnet_pose.json"
 #define DEFAULT_TFLITE_SEGMENTATION_MODEL \
-    "/etc/models/deeplabv3_plus_mobilenet_quantized.tflite"
-#define DEFAULT_SEGMENTATION_LABELS "/etc/labels/deeplabv3_resnet50.json"
-#define DEFAULT_POSE_SETTINGS_PATH "/etc/labels/hrnet_settings.json"
+    "deeplabv3_plus_mobilenet_quantized.tflite"
+#define DEFAULT_SEGMENTATION_LABELS "deeplabv3_resnet50.json"
+#define DEFAULT_POSE_SETTINGS_PATH "hrnet_settings.json"
 
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-parallel-inference.json"
+#define DEFAULT_CONFIG_FILE "config-parallel-inference.json"
 
 /**
  * Length of string for when models path and labels path need to be
@@ -127,6 +129,7 @@ typedef struct GstPipelineData_{
  * Structure for various application specific options
  */
 typedef struct {
+  gchar *artifacts_dir;
   gchar *file_path;
   gchar *rtsp_ip_port;
   gchar *object_detection_model_path;
@@ -348,67 +351,52 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->object_detection_model_path != (gchar *)(
-      &DEFAULT_TFLITE_OBJECT_DETECTION_MODEL) &&
-      options->object_detection_model_path != NULL) {
+  if (options->object_detection_model_path != NULL) {
     g_free ((gpointer)options->object_detection_model_path);
   }
 
-  if (options->object_detection_labels_path != (gchar *)(
-      &DEFAULT_OBJECT_DETECTION_LABELS) &&
-      options->object_detection_labels_path != NULL) {
+  if (options->object_detection_labels_path != NULL) {
     g_free ((gpointer)options->object_detection_labels_path);
   }
 
-  if (options->pose_detection_model_path != (gchar *)(
-      &DEFAULT_TFLITE_POSE_DETECTION_MODEL) &&
-      options->pose_detection_model_path != NULL) {
+  if (options->pose_detection_model_path != NULL) {
     g_free ((gpointer)options->pose_detection_model_path);
   }
 
-  if (options->pose_detection_labels_path != (gchar *)(
-      &DEFAULT_POSE_DETECTION_LABELS) &&
-      options->pose_detection_labels_path != NULL) {
+  if (options->pose_detection_labels_path != NULL) {
     g_free ((gpointer)options->pose_detection_labels_path);
   }
 
-  if (options->segmentation_model_path != (gchar *)(
-      &DEFAULT_TFLITE_SEGMENTATION_MODEL) &&
-      options->segmentation_model_path != NULL) {
+  if (options->segmentation_model_path != NULL) {
     g_free ((gpointer)options->segmentation_model_path);
   }
 
-  if (options->segmentation_labels_path != (gchar *)(
-      &DEFAULT_SEGMENTATION_LABELS) &&
-      options->segmentation_labels_path != NULL) {
+  if (options->segmentation_labels_path != NULL) {
     g_free ((gpointer)options->segmentation_labels_path);
   }
 
-  if (options->classification_model_path != (gchar *)(
-      &DEFAULT_TFLITE_CLASSIFICATION_MODEL) &&
-      options->classification_model_path != NULL) {
+  if (options->classification_model_path != NULL) {
     g_free ((gpointer)options->classification_model_path);
   }
 
-  if (options->classification_labels_path != (gchar *)(
-      &DEFAULT_CLASSIFICATION_LABELS) &&
-      options->classification_labels_path != NULL) {
+  if (options->classification_labels_path != NULL) {
     g_free ((gpointer)options->classification_labels_path);
   }
 
-  if (options->pose_settings_path != (gchar *)(&DEFAULT_POSE_SETTINGS_PATH) &&
-      options->pose_settings_path != NULL) {
+  if (options->pose_settings_path != NULL) {
     g_free ((gpointer)options->pose_settings_path);
+  }
+
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer)options->artifacts_dir);
   }
 
   if (options->pipeline_data != NULL) {
     g_free ((gpointer)options->pipeline_data);
   }
 
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+  if (config_file != NULL) {
     g_free ((gpointer)config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -735,11 +723,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     }
   }
 
-  // Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // Set the properties of pad_filter for negotiation with qtivcomposer
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "RGBA", NULL);
 
@@ -752,11 +736,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   }
   gst_caps_unref (filtercaps);
 
-  // Use specific detection filter settings for segmentation. Same
-  // "no pinned width/height" rule applies here — qtimlpostprocess's src
-  // caps must stay unfixated; the qtivcomposer sink-pad dimensions size
-  // the tile instead.
-  filtercaps = gst_caps_new_simple ("video/x-raw", NULL, NULL);
+  // Use specific detection filter settings for segmentation
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+    "format", G_TYPE_STRING, "RGBA", NULL);
 
   g_object_set (G_OBJECT (detection_filter[GST_SEGMENTATION]),
       "caps", filtercaps, NULL);
@@ -970,6 +952,10 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
+  const gchar *pose_settings_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -1000,8 +986,19 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -1010,48 +1007,147 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "detection-model")) {
-    options->object_detection_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "detection-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->object_detection_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->object_detection_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "detection-labels")) {
-    options->object_detection_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "detection-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->object_detection_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->object_detection_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-model")) {
-    options->pose_detection_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "pose-model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "pose-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->pose_detection_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->pose_detection_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-labels")) {
-    options->pose_detection_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "pose-labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "pose-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->pose_detection_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->pose_detection_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "segmentation-model")) {
-    options->segmentation_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "segmentation-model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "segmentation-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->segmentation_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->segmentation_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "segmentation-labels")) {
-    options->segmentation_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "segmentation-labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "segmentation-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->segmentation_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->segmentation_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "classification-model")) {
-    options->classification_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "classification-model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "classification-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->classification_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->classification_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "classification-labels")) {
-    options->classification_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "classification-labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "classification-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->classification_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->classification_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-settings-path")) {
-    options->pose_settings_path =
-        g_strdup (json_object_get_string_member (root_obj, "pose-settings-path"));
+    pose_settings_filename =
+        json_object_get_string_member (root_obj, "pose-settings-path");
+    if (g_path_is_absolute (pose_settings_filename)) {
+      options->pose_settings_path = g_strdup (pose_settings_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->pose_settings_path =
+          g_build_filename (options->artifacts_dir, "labels", pose_settings_filename, NULL);
+    }
   }
 
   g_object_unref (parser);
@@ -1066,6 +1162,7 @@ main (gint argc, gchar * argv[])
   GstElement *pipeline = NULL;
   const gchar *app_name = NULL;
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
   GstAppContext appctx = {};
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
@@ -1073,26 +1170,20 @@ main (gint argc, gchar * argv[])
   gchar help_description[4096];
   GstAppOptions options = {};
 
+  home_dir = g_getenv ("HOME");
   options.camera_type = GST_CAMERA_TYPE_NONE;
+  options.artifacts_dir = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.object_detection_model_path =
-      DEFAULT_TFLITE_OBJECT_DETECTION_MODEL;
-  options.object_detection_labels_path =
-      DEFAULT_OBJECT_DETECTION_LABELS;
-  options.pose_detection_model_path =
-      DEFAULT_TFLITE_POSE_DETECTION_MODEL;
-  options.pose_detection_labels_path =
-      DEFAULT_POSE_DETECTION_LABELS;
-  options.segmentation_model_path =
-      DEFAULT_TFLITE_SEGMENTATION_MODEL;
-  options.segmentation_labels_path =
-      DEFAULT_SEGMENTATION_LABELS;
-  options.classification_model_path =
-      DEFAULT_TFLITE_CLASSIFICATION_MODEL;
-  options.classification_labels_path =
-      DEFAULT_CLASSIFICATION_LABELS;
-  options.pose_settings_path = DEFAULT_POSE_SETTINGS_PATH;
+  options.object_detection_model_path = NULL;
+  options.object_detection_labels_path = NULL;
+  options.pose_detection_model_path = NULL;
+  options.pose_detection_labels_path = NULL;
+  options.segmentation_model_path = NULL;
+  options.segmentation_labels_path = NULL;
+  options.classification_model_path = NULL;
+  options.classification_labels_path = NULL;
+  options.pose_settings_path = NULL;
   options.use_file = FALSE;
   options.use_rtsp = FALSE;
   options.use_camera = FALSE;
@@ -1129,6 +1220,9 @@ main (gint argc, gchar * argv[])
     "%s"
     "  file-path: \"/PATH\"\n"
     "      File source path\n"
+    "      The media file should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/media\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
     "      Use this parameter to provide the rtsp input.\n"
     "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
@@ -1137,38 +1231,65 @@ main (gint argc, gchar * argv[])
     "      Path to Object Detection model\n"
     "      Default Object Detection model: "
     DEFAULT_TFLITE_OBJECT_DETECTION_MODEL"\n"
+    "      The model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  detection-labels: \"/PATH\"\n"
     "      Path to Object Detection labels\n"
     "      Default Object Detection labels: "
     DEFAULT_OBJECT_DETECTION_LABELS"\n"
+    "      The label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-model: \"/PATH\"\n"
     "      Path to Pose Detection model\n"
     "      Default Pose Detection model: "
     DEFAULT_TFLITE_POSE_DETECTION_MODEL"\n"
+    "      The model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-labels: \"/PATH\"\n"
     "      Path to Pose Detection labels\n"
     "      Default Pose Detection labels: "
     DEFAULT_POSE_DETECTION_LABELS"\n"
+    "      The label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  segmentation-model: \"/PATH\"\n"
     "      Path to Segmentation model\n"
     "      Default Segmentation model: "
     DEFAULT_TFLITE_SEGMENTATION_MODEL"\n"
+    "      The model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  segmentation-labels: \"/PATH\"\n"
     "      Path to Segmentation labels\n"
     "      Default Segmentation labels: "
     DEFAULT_SEGMENTATION_LABELS"\n"
+    "      The label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  classification-model: \"/PATH\"\n"
     "      Path to Classification model\n"
     "      Default Classification model: "
     DEFAULT_TFLITE_CLASSIFICATION_MODEL"\n"
+    "      The model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  classification-labels: \"/PATH\"\n"
     "      Path to Classification labels\n"
     "      Default Classification labels: "
     DEFAULT_CLASSIFICATION_LABELS"\n"
+    "      The label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-settings-path: \"/PATH\"\n"
     "      Path to pose-settings-labels labels\n"
     "      Default pose settings labels: "
     DEFAULT_POSE_SETTINGS_PATH"\n"
+    "      The label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     ,
     app_name, DEFAULT_CONFIG_FILE, camera_description);
   help_description[4095] = '\0';
@@ -1201,9 +1322,21 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   // Choose default config file if config file not provided
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -1212,9 +1345,66 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
+
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
+  }
+
+  if (options.object_detection_model_path == NULL) {
+    options.object_detection_model_path =
+        g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_OBJECT_DETECTION_MODEL, NULL);
+  }
+
+  if (options.object_detection_labels_path == NULL) {
+    options.object_detection_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_OBJECT_DETECTION_LABELS, NULL);
+  }
+
+  if (options.pose_detection_model_path == NULL) {
+    options.pose_detection_model_path =
+        g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_POSE_DETECTION_MODEL, NULL);
+  }
+
+  if (options.pose_detection_labels_path == NULL) {
+    options.pose_detection_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_POSE_DETECTION_LABELS, NULL);
+  }
+
+  if (options.segmentation_model_path == NULL) {
+    options.segmentation_model_path =
+        g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_SEGMENTATION_MODEL, NULL);
+  }
+
+  if (options.segmentation_labels_path == NULL) {
+    options.segmentation_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_SEGMENTATION_LABELS, NULL);
+  }
+
+  if (options.classification_model_path == NULL) {
+    options.classification_model_path =
+        g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_CLASSIFICATION_MODEL, NULL);
+  }
+
+  if (options.classification_labels_path == NULL) {
+    options.classification_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_CLASSIFICATION_LABELS, NULL);
+  }
+
+  if (options.pose_settings_path == NULL) {
+    options.pose_settings_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_POSE_SETTINGS_PATH, NULL);
   }
 
   // Check for input source

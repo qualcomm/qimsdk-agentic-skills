@@ -38,6 +38,7 @@ Load for any request that generates, edits, validates, or reviews pipeline or C 
 - Generated artifact folder names must start with `qimsdk-gstreamer-`.
 - If generated code changes, update the artifact README in the same pass.
 - For `qticamsrc`/`qtiqmmfsrc` camera input, if the user omits resolution or framerate, use `video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1` and document the `1920x1080 @ 30fps` camera default in README assumptions.
+- For an ONNX Runtime (`qtimlonnx`) inference stage, always honor an explicitly requested `execution-provider` / `optimization-level`. When the user asks for `execution-provider=qnn`, also set `backend-path=/usr/lib/libQnnHtp.so` (required for the QNN provider — the HTP/NPU backend library) and keep whatever `optimization-level` and optional `htp-performance-mode` the user named; note the device provider-plugin prerequisite (`libonnxruntime_providers_qnn.so`, a separate install) in the README. When the user requests neither provider nor level, generate `execution-provider=cpu optimization-level=disable-all` — the portable, device-verified baseline (CPU is the only provider built into the ORT core; `disable-all` preserves the `Transpose` nodes `qtimlonnx` needs for NCHW/NHWC layout detection, so higher levels can break preroll). This overrides the SDK's own `enable-extended` property default. Document the chosen `cpu` + `disable-all` default in the artifact README as the portable baseline. See `plugin-catalog.md` "qtimlonnx - Full Property Reference" (Generation default).
 
 ## Multi-Stream Layout Rule
 

@@ -44,7 +44,7 @@
       ],
       "versions": [
         {
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "skills/qimsdk-gstreamer-app-builder",
           "docPath": "skills/qimsdk-gstreamer-app-builder/SKILL.md",
           "files": [
@@ -118,7 +118,7 @@
       ],
       "versions": [
         {
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "skills/qimsdk-cpp-app-builder",
           "docPath": "skills/qimsdk-cpp-app-builder/SKILL.md",
           "files": [
@@ -192,7 +192,7 @@
       ],
       "versions": [
         {
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "skills/qimsdk-python-app-builder",
           "docPath": "skills/qimsdk-python-app-builder/SKILL.md",
           "files": [

@@ -55,6 +55,7 @@ target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${JSON_GLIB_LIBRARIES}
   ${GST_WEBRTC_LIBRARIES}
   ${GST_SDP_LIBRARIES}
+  gstappsutils
 )
 
 if(GST_SOUP3)

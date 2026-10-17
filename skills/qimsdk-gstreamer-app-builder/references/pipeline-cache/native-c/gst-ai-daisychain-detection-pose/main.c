@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -53,19 +55,19 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
+#define DEFAULT_TFLITE_YOLOX_MODEL "yolox_quantized.tflite"
 #define DEFAULT_TFLITE_POSE_MODEL \
-    "/etc/models/hrnet_pose_quantized.tflite"
-#define DEFAULT_YOLOX_LABELS "/etc/labels/yolox.json"
-#define DEFAULT_POSE_LABELS "/etc/labels/hrnet_pose.json"
-#define DEFAULT_POSE_SETTINGS_PATH "/etc/labels/hrnet_settings.json"
+    "hrnet_pose_quantized.tflite"
+#define DEFAULT_YOLOX_LABELS "yolox.json"
+#define DEFAULT_POSE_LABELS "hrnet_pose.json"
+#define DEFAULT_POSE_SETTINGS_PATH "hrnet_settings.json"
 #define DEFAULT_IP "127.0.0.1"
 #define DEFAULT_PORT "8900"
 
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-daisychain-detection-pose.json"
+#define DEFAULT_CONFIG_FILE "config-daisychain-detection-pose.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -150,6 +152,7 @@ typedef enum {
  * Structure for various application specific options
  */
 typedef struct {
+  gchar *artifacts_dir;
   gboolean camera_source;
   gchar *input_file_path;
   gchar *output_file_path;
@@ -324,28 +327,23 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     options->rtsp_ip_port = NULL;
   }
 
-  if (options->yolox_model_path != (gchar *)(&DEFAULT_TFLITE_YOLOX_MODEL) &&
-      options->yolox_model_path != NULL) {
+  if (options->yolox_model_path != NULL) {
     g_free ((gpointer)options->yolox_model_path);
   }
 
-  if (options->hrnet_model_path != (gchar *)(&DEFAULT_TFLITE_POSE_MODEL) &&
-      options->hrnet_model_path != NULL) {
+  if (options->hrnet_model_path != NULL) {
     g_free ((gpointer)options->hrnet_model_path);
   }
 
-  if (options->yolox_labels_path != (gchar *)(&DEFAULT_YOLOX_LABELS) &&
-      options->yolox_labels_path != NULL) {
+  if (options->yolox_labels_path != NULL) {
     g_free ((gpointer)options->yolox_labels_path);
   }
 
-  if (options->hrnet_labels_path != (gchar *)(&DEFAULT_POSE_LABELS) &&
-      options->hrnet_labels_path != NULL) {
+  if (options->hrnet_labels_path != NULL) {
     g_free ((gpointer)options->hrnet_labels_path);
   }
 
-  if (options->pose_settings_path != (gchar *)(&DEFAULT_POSE_SETTINGS_PATH) &&
-      options->pose_settings_path != NULL) {
+  if (options->pose_settings_path != NULL) {
     g_free ((gpointer)options->pose_settings_path);
   }
 
@@ -364,9 +362,12 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->port_num);
   }
 
-  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free (options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer) config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -413,6 +414,8 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   GstStructure *delegate_options = NULL;
   gboolean ret = FALSE;
   gchar element_name[128], settings[128];
+  gint daisychain_width = DEFAULT_DAISYCHAIN_OUTPUT_WIDTH;
+  gint daisychain_height = DEFAULT_DAISYCHAIN_OUTPUT_HEIGHT;
   gint preview_width = DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH;
   gint preview_height = DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT;
   gint framerate = DEFAULT_CAMERA_FRAME_RATE;
@@ -805,13 +808,10 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
     goto error_clean_elements;
   }
 
-  // 2.4 Set the properties of pad_filter for pose. qtimlpostprocess src
-  // emits video/x-raw,format={RGBA,RGBx} (never BGRA); leave width/height
-  // unset — pinning them fails caps fixation with "Fixated width in filter
-  // caps is not supported with current post-process type!". The
-  // qtivcomposer sink-pad dimensions (DEFAULT_DAISYCHAIN_OUTPUT_WIDTH/HEIGHT)
-  // size the tile instead.
+  // 2.4 Set the properties of pad_filter for pose
   pad_filter = gst_caps_new_simple ("video/x-raw",
+      "width", G_TYPE_INT, daisychain_width,
+      "height", G_TYPE_INT, daisychain_height,
       "format", G_TYPE_STRING, "RGBA", NULL);
   for (gint i = 0; i < SPLIT_COUNT; i++) {
     g_object_set (G_OBJECT (filter[i]), "caps", pad_filter, NULL);
@@ -1412,6 +1412,13 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *output_filename = NULL;
+  const gchar *det_model_filename = NULL;
+  const gchar *det_label_filename = NULL;
+  const gchar *pose_model_filename = NULL;
+  const gchar *pose_label_filename = NULL;
+  const gchar *pose_settings_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -1434,8 +1441,17 @@ parse_json (gchar * config_file, GstAppOptions * options)
   root_obj = json_node_get_object (root);
 
   if (json_object_has_member (root_obj, "input-file")) {
-    options->input_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "input-file"));
+    input_filename = json_object_get_string_member (root_obj, "input-file");
+    if (g_path_is_absolute (input_filename)) {
+      options->input_file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->input_file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -1468,37 +1484,91 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "detection-model")) {
-    options->yolox_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-model"));
+    det_model_filename = json_object_get_string_member (root_obj, "detection-model");
+    if (g_path_is_absolute (det_model_filename)) {
+      options->yolox_model_path = g_strdup (det_model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->yolox_model_path =
+          g_build_filename (options->artifacts_dir, "models", det_model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "detection-labels")) {
-    options->yolox_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-labels"));
+    det_label_filename = json_object_get_string_member (root_obj, "detection-labels");
+    if (g_path_is_absolute (det_label_filename)) {
+      options->yolox_labels_path = g_strdup (det_label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->yolox_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", det_label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-model")) {
-    options->hrnet_model_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-model"));
+    pose_model_filename = json_object_get_string_member (root_obj,
+        "pose-model");
+    if (g_path_is_absolute (pose_model_filename)) {
+      options->hrnet_model_path = g_strdup (pose_model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->hrnet_model_path =
+          g_build_filename (options->artifacts_dir, "models", pose_model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-labels")) {
-    options->hrnet_labels_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-labels"));
+    pose_label_filename = json_object_get_string_member (root_obj,
+        "pose-labels");
+    if (g_path_is_absolute (pose_label_filename)) {
+      options->hrnet_labels_path = g_strdup (pose_label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->hrnet_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", pose_label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "pose-settings-path")) {
-    options->pose_settings_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-settings-path"));
+    pose_settings_filename = json_object_get_string_member (root_obj,
+        "pose-settings-path");
+    if (g_path_is_absolute (pose_settings_filename)) {
+      options->pose_settings_path = g_strdup (pose_settings_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->pose_settings_path =
+          g_build_filename (options->artifacts_dir, "labels", pose_settings_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "output-file")) {
-    options->output_file_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "output-file"));
+    output_filename = json_object_get_string_member (root_obj,
+        "output-file");
+    if (g_path_is_absolute (output_filename)) {
+      options->output_file_path = g_strdup (output_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_object_unref (parser);
+        return -1;
+      }
+      options->output_file_path =
+          g_build_filename (options->artifacts_dir, "media", output_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "output-ip-address")) {
@@ -1559,6 +1629,8 @@ parse_json (gchar * config_file, GstAppOptions * options)
       options->detection_use_gpu = TRUE;
     else {
       gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+      g_object_unref (parser);
+      return -1;
     }
     g_print ("Detection delegate : %s\n", delegate);
   }
@@ -1574,6 +1646,8 @@ parse_json (gchar * config_file, GstAppOptions * options)
       options->pose_use_gpu = TRUE;
     else {
       gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+      g_object_unref (parser);
+      return -1;
     }
     g_print ("Classification delegate : %s\n", delegate);
   }
@@ -1593,18 +1667,22 @@ main (gint argc, gchar * argv[])
   gchar *config_file = NULL;
   GstAppOptions options = {};
   GstAppContext appctx = {};
+  const gchar *home_dir = NULL;
   gboolean ret = FALSE;
   gchar help_description[4096];
   guint intrpt_watch_id = 0;
 
+  home_dir = g_getenv ("HOME");
+
   options.input_file_path = NULL;
   options.output_file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.yolox_model_path = DEFAULT_TFLITE_YOLOX_MODEL;
-  options.hrnet_model_path = DEFAULT_TFLITE_POSE_MODEL;
-  options.yolox_labels_path = DEFAULT_YOLOX_LABELS;
-  options.hrnet_labels_path = DEFAULT_POSE_LABELS;
-  options.pose_settings_path = DEFAULT_POSE_SETTINGS_PATH;
+  options.yolox_model_path = NULL;
+  options.hrnet_model_path = NULL;
+  options.yolox_labels_path = NULL;
+  options.hrnet_labels_path = NULL;
+  options.pose_settings_path = NULL;
+  options.artifacts_dir = NULL;
   options.camera_source = FALSE;
   options.display = FALSE;
   options.use_usb = FALSE;
@@ -1646,37 +1724,50 @@ main (gint argc, gchar * argv[])
     "\nThis Sample App demonstrates Daisy chain of Object Detection and Pose\n"
     "\nConfig file Fields:\n"
     "  input-file: \"/PATH\"\n"
-    "      Input File path\n"
+    "      Path to the input media file.\n"
+    "      The media file should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/media\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
     "      Use this parameter to provide the rtsp input.\n"
     "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
     "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
     "  %s"
     "  detection-model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    "for YOLOX detection model\n"
-    "      Default path for YOLOX model: "DEFAULT_TFLITE_YOLOX_MODEL"\n"
+    "      Path to YOLOX detection model file.\n"
+    "      Default model file: "DEFAULT_TFLITE_YOLOX_MODEL"\n"
+    "      Model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  detection-labels: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    " for YOLOX labels\n"
-    "      Default path for YOLOX labels: "DEFAULT_YOLOX_LABELS"\n"
+    "      Path to YOLOX labels file.\n"
+    "      Default labels file: "DEFAULT_YOLOX_LABELS"\n"
+    "      Label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    "for Pose Detection model\n"
-    "      Default path for Pose Detection model: "
-    DEFAULT_TFLITE_POSE_MODEL"\n"
+    "      Path to pose detection model file.\n"
+    "      Default model file: "DEFAULT_TFLITE_POSE_MODEL"\n"
+    "      Model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-labels: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    " for Pose Detection labels\n"
-    "      Default path for Pose Detection labels: "
-    DEFAULT_POSE_LABELS"\n"
+    "      Path to pose detection labels file.\n"
+    "      Default labels file: "DEFAULT_POSE_LABELS"\n"
+    "      Label files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  pose-settings-path: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    " for Pose setting\n"
-    "      Default path for Pose Settings: "
-    DEFAULT_POSE_SETTINGS_PATH"\n"
+    "      Path to pose settings file.\n"
+    "      Default settings file: "DEFAULT_POSE_SETTINGS_PATH"\n"
+    "      Settings files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/labels\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  output-file: \"/PATH\"\n"
-    "      Output file path\n"
+    "      Output file path.\n"
+    "      For relative path, output will be saved under:\n"
+    "        $HOME/Downloads/qimsdk_samples/media\n"
+    "      Alternatively, provide an absolute file path.\n"
     "      If this field is not filled, then display output is selected\n"
     "  enable-usb-camera: Use this Parameter to enable-usb-camera. It takes\n"
     "      TRUE or FALSE as input\n"
@@ -1721,10 +1812,25 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   // Choose default config file if config file not provided
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
   }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
+  }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (!file_exists (config_file)) {
     g_printerr ("Invalid config file path: %s\n", config_file);
@@ -1736,6 +1842,17 @@ main (gint argc, gchar * argv[])
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
+
+  if (options.yolox_model_path == NULL)
+    options.yolox_model_path = g_build_filename (options.artifacts_dir, "models", DEFAULT_TFLITE_YOLOX_MODEL, NULL);
+  if (options.hrnet_model_path == NULL)
+    options.hrnet_model_path = g_build_filename (options.artifacts_dir, "models", DEFAULT_TFLITE_POSE_MODEL, NULL);
+  if (options.yolox_labels_path == NULL)
+    options.yolox_labels_path = g_build_filename (options.artifacts_dir, "labels", DEFAULT_YOLOX_LABELS, NULL);
+  if (options.hrnet_labels_path == NULL)
+    options.hrnet_labels_path = g_build_filename (options.artifacts_dir, "labels", DEFAULT_POSE_LABELS, NULL);
+  if (options.pose_settings_path == NULL)
+    options.pose_settings_path = g_build_filename (options.artifacts_dir, "labels", DEFAULT_POSE_SETTINGS_PATH, NULL);
 
   if ((options.display && options.output_file_path && options.output_ip_address) ||
       (options.display && options.output_file_path) || (options.output_file_path &&

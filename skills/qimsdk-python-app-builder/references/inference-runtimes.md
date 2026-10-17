@@ -96,6 +96,8 @@ Use exact property names from the loaded source/example:
 
 For NPU/HTP inference, set both backend and system paths when required by the target environment. Do not invent `backend-path`, `system-lib`, `output-tensors`, or `tensor-names`.
 
+When a verified model/output contract requires the `tensors` filter, pass it to Python as a list of strings, for example `.set("tensors", ["boxes", "scores", "class_idx"])` — never the gst-launch angle-bracket string. See `api-surface.md`'s general `GstValueArray` rule for why the string form fails silently in Python instead of raising. Keep omitting `tensors` when the model's native output order is accepted, and never invent names without model evidence.
+
 ## QAIRT / `qtimlqairt`
 
 Use QAIRT only when the user explicitly requests it or provides model evidence

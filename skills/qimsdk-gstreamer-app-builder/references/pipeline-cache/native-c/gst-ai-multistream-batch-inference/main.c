@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -38,7 +40,7 @@
     "output-type":"wayland",
 
     # Output path to save file, if "output-type":"filesink"
-    "out-file":"/etc/media/out.mp4",
+    "out-file":"out.mp4",
 
     "pipeline-info":[
         {
@@ -51,10 +53,10 @@
           # 4 file stream path for batching
           "input-file-path":[
             {
-                "stream-0"/etc/media/Draw_720p_180s_30FPS.mp4",
-                "stream-1":"/etc/media/Animals_000_720p_180s_30FPS.mp4",
-                "stream-2":"/etc/media/Draw_720p_180s_30FPS.mp4",
-                "stream-3":"/etc/media/Street_Bridge_720p_180s_30FPS.mp4"
+                "stream-0":"Draw_720p_180s_30FPS.mp4",
+                "stream-1":"Animals_000_720p_180s_30FPS.mp4",
+                "stream-2":"Draw_720p_180s_30FPS.mp4",
+                "stream-3":"Street_Bridge_720p_180s_30FPS.mp4"
             }
           ],
 
@@ -62,10 +64,10 @@
           "mlframework":"qtimltflite",
 
           # Batch model path for Inference
-          "model-path":"/etc/models/deeplabv3_plus_mobilenet_quantized.tflite",
+          "model-path":"deeplabv3_plus_mobilenet_quantized.tflite",
 
           # Labels path
-          "labels-path":"/etc/labels/deeplabv3_resnet50.labels",
+          "labels-path":"deeplabv3_resnet50.labels",
 
           # Post process plugin qtimlvsegmentation/qtimlvdetection
           "post-process-plugin": "qtimlvsegmentation"
@@ -107,7 +109,7 @@
 #define DEFAULT_DISPLAY_WIDTH 1920
 #define DEFAULT_DISPLAY_HEIGHT 1080
 
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-multistream-batch-inference.json"
+#define DEFAULT_CONFIG_FILE "config-multistream-batch-inference.json"
 
 /**
  * Structure for various application specific options
@@ -128,6 +130,7 @@ typedef struct {
 typedef struct {
   gint num_file;
   gchar *output_type;
+  gchar *artifacts_dir;
   gboolean out_display;
   gchar *out_file;
 } GstSourceCount;
@@ -260,11 +263,7 @@ set_ml_params (GstElement * qtimlpostprocess,
     return FALSE;
   }
 
-  // Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // Set the properties of pad_filter for negotiation with qtivcomposer
   if (g_strcmp0 (options.post_process, "qtimlvsegmentation") == 0) {
     // set qtimlvsegmentation properties
     pad_filter = gst_caps_new_simple ("video/x-raw",
@@ -278,7 +277,9 @@ set_ml_params (GstElement * qtimlpostprocess,
     g_object_set (G_OBJECT (qtimlpostprocess), "settings", settings, NULL);
     g_object_set (G_OBJECT (qtimlpostprocess), "results", 10, NULL);
     pad_filter = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, "RGBA", NULL);
+        "format", G_TYPE_STRING, "RGBA",
+        "width", G_TYPE_INT, 640,
+        "height", G_TYPE_INT, 360, NULL);
     g_object_set (G_OBJECT (filter), "caps", pad_filter, NULL);
   }
 
@@ -439,6 +440,14 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions options[],
   if (source_count.out_file != NULL) {
     g_free (source_count.out_file);
     source_count.out_file = NULL;
+  }
+  if (source_count.output_type != NULL) {
+    g_free (source_count.output_type);
+    source_count.output_type = NULL;
+  }
+  if (source_count.artifacts_dir != NULL) {
+    g_free (source_count.artifacts_dir);
+    source_count.artifacts_dir = NULL;
   }
   for (gint i = 0; i < streams; i++) {
     if (options[i].model_path != NULL) {
@@ -788,7 +797,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
     g_object_set (G_OBJECT (waylandsink), "fullscreen", TRUE, NULL);
     g_object_set (G_OBJECT (waylandsink), "sync", TRUE, NULL);
 
-    g_object_set (G_OBJECT (fpsdisplaysink), "sync", FALSE, NULL);
+    g_object_set (G_OBJECT (fpsdisplaysink), "sync", TRUE, NULL);
     g_object_set (G_OBJECT (fpsdisplaysink), "signal-fps-measurements", TRUE,
         NULL);
     g_object_set (G_OBJECT (fpsdisplaysink), "text-overlay", TRUE, NULL);
@@ -1052,6 +1061,10 @@ main (gint argc, gchar * argv[])
   gchar help_description[4096];
   gint streams = 0;
   gint htp_count = 1;
+  const gchar *home_dir = NULL;
+
+  home_dir = g_getenv ("HOME");
+  source_count.artifacts_dir = NULL;
 
   // Define the new limit
   rl.rlim_cur = 4096; // Soft limit
@@ -1088,8 +1101,17 @@ main (gint argc, gchar * argv[])
       "  input/output stream combinations\n"
       "  input-type: It takes file as input\n"
       "  input-file-path: It takes path of input files\n"
-      "  model-path: It takes path of Model file\n"
+      "      Relative paths are resolved under:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Absolute file paths are also supported.\n"
+      "  model-path: It takes path of model file\n"
+      "      Model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Absolute file paths are also supported.\n"
       "  labels-path: It takes path of labels file\n"
+      "      Label files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Absolute file paths are also supported.\n"
       "  post-process-plugin: It takes input as either qtimlvsegmentation"
       "  or qtimlvdetection\n"
       "  mlframework: It takes either tflite, snpe or qnn as input\n"
@@ -1098,7 +1120,10 @@ main (gint argc, gchar * argv[])
       "      Example:\n"
       "      [\"boxes\", \"scores\", \"class_idx\"]\n"
       "  output-type: It takes either wayland or filesink as output\n"
-      "  out-file: Path of output filename\n",
+      "  out-file: Path of output filename\n"
+      "      Relative paths are resolved under:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Absolute file paths are also supported.\n",
       app_name, DEFAULT_CONFIG_FILE);
   help_description[4095] = '\0';
 
@@ -1129,8 +1154,24 @@ main (gint argc, gchar * argv[])
   }
 
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
   }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, options, source_count, streams);
+    return -EINVAL;
+  }
+
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, options, source_count, streams);
+    g_free (config_file);
+    return EXIT_FAILURE;
+  }
+
+  source_count.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (!file_exists (config_file)) {
     g_printerr ("Invalid config file path: %s\n", config_file);
@@ -1190,17 +1231,34 @@ main (gint argc, gchar * argv[])
     input_file_info = json_array_get_object_element (files_info, 0);
 
     for (guint file_id = 0; file_id < DEFAULT_BATCH_SIZE; file_id++) {
+      const gchar *stream_filename = NULL;
       snprintf (file_name, 1024, "stream-%d", file_id);
-      options[id].file_path[file_id] =
-          g_strdup (json_object_get_string_member (input_file_info, file_name));
+      stream_filename = json_object_get_string_member (input_file_info, file_name);
+      if (g_path_is_absolute (stream_filename)) {
+        options[id].file_path[file_id] = g_strdup (stream_filename);
+      } else {
+        options[id].file_path[file_id] =
+            g_build_filename (source_count.artifacts_dir, "media", stream_filename, NULL);
+      }
       g_print ("file_path-%d: %s\n", file_id, options[id].file_path[file_id]);
       source_count.num_file++;
     }
 
-    options[id].model_path =
-        g_strdup (json_object_get_string_member (info, "model-path"));
-    options[id].labels_path =
-        g_strdup (json_object_get_string_member (info, "labels-path"));
+    const gchar *model_filename = json_object_get_string_member (info, "model-path");
+    if (g_path_is_absolute (model_filename)) {
+      options[id].model_path = g_strdup (model_filename);
+    } else {
+      options[id].model_path =
+          g_build_filename (source_count.artifacts_dir, "models", model_filename, NULL);
+    }
+
+    const gchar *labels_filename = json_object_get_string_member (info, "labels-path");
+    if (g_path_is_absolute (labels_filename)) {
+      options[id].labels_path = g_strdup (labels_filename);
+    } else {
+      options[id].labels_path =
+          g_build_filename (source_count.artifacts_dir, "labels", labels_filename, NULL);
+    }
     options[id].post_process =
         g_strdup (json_object_get_string_member (info, "post-process-plugin"));
     const gchar* framework = g_strdup (json_object_get_string_member (info,
@@ -1250,8 +1308,14 @@ main (gint argc, gchar * argv[])
   if (g_strcmp0 (source_count.output_type,"wayland") == 0) {
     source_count.out_display = TRUE;
   } else if (g_strcmp0 (source_count.output_type, "filesink") == 0) {
-    source_count.out_file =
-        g_strdup (json_object_get_string_member (root_obj, "out-file"));
+    const gchar *output_filename =
+        json_object_get_string_member (root_obj, "out-file");
+    if (g_path_is_absolute (output_filename)) {
+      source_count.out_file = g_strdup (output_filename);
+    } else {
+      source_count.out_file =
+          g_build_filename (source_count.artifacts_dir, "media", output_filename, NULL);
+    }
   } else {
     g_printerr ("Invalid output type\n");
     gst_app_context_free (&appctx, options, source_count, streams);

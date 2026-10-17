@@ -20,4 +20,4 @@ gst-launch-1.0 -e --gst-debug=3 \
   filesrc location=$HOME/media/video.mp4 ! qtdemux ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! queue ! comp.sink_4 \
   filesrc location=$HOME/media/video.mp4 ! qtdemux ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! queue ! comp.sink_5 \
   filesrc location=$HOME/media/video.mp4 ! qtdemux ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! queue ! comp.sink_6 \
-  filesrc location=$HOME/media/video.mp4 ! qtdemux ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! queue ! comp.sink_7
+  filesrc location=$HOME/media/video.mp4 ! qtdemux ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! queue ! comp.sink_7 

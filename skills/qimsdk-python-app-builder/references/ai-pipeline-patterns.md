@@ -98,8 +98,8 @@ qtivcomposer -> display/file
 Rules:
 
 - Do not use `qtimetamux` or `qtivoverlay`.
-- Use `qtimlpostprocess module="srnet"`.
-- Use TFLite external delegate options for HTP unless the user provides exact options.
+- Use `qtimlpostprocess module="srnet"`; confidence settings do not apply because SR renders pixels rather than scored metadata.
+- Use TFLite external delegate options for HTP unless the user provides exact options. When the user supplies an `.onnx` model, replace only the inference stage with `qtimlonnx` and use its requested CPU or QNN provider configuration from `plugin-catalog.md` (when the user requests neither provider nor optimization level, apply the `execution-provider=cpu` + `optimization-level=disable-all` generation default); preserve the surrounding SR composer topology.
 - For side-by-side comparison, use `qtivcomposer` geometry: passthrough left and SR output right. Ask if layout dimensions are not specified.
 - For MP4 output, place `VideoFilter().format("NV12")` directly after `qtivcomposer` before `v4l2h264enc`; do not insert `qtivtransform` after the composer.
 
@@ -158,6 +158,8 @@ Rules:
 - Stage 2 settings must point to the facemap 3DMM settings file and the runtime must have `blendShape.bin`, `meanFace.bin`, and `shapeBasis.bin` available under `/etc/data/` unless the user/reference provides another documented data location.
 - Stage 3 settings must point to the registered face database entries; recognition can run without matches but will not identify anyone without valid database entries.
 - Use TFLite external delegate HTP options for all three stages unless the user provides another documented backend. Stage 2 and Stage 3 must use `QNNExternalDelegate,backend_type=htp,htp_performance_mode=(string)2,log_level=(string)1;` unless the user provides exact delegate options.
+- Stage 3 runs the built-in `qtimlpostprocess module=qfr` on the multi-head recognition DLC. That DLC exports six heads (`id_feature[1,512]`, `liveness_feature[1,32]`, `eye_closeness[1,2]`, `glasses[1,2]`, `mask[1,2]`, `sunglasses[1,2]`), but SNPE's default output set marks only the last leaf (`sunglasses`) as a network output, so `qtimlsnpe` with no `tensors=` emits one tensor against `qfr`'s six-tensor contract and caps negotiation fails. Set `tensors=["id_feature", "liveness_feature", "eye_closeness", "glasses", "mask", "sunglasses"]` on the Stage-3 inference element so all six heads reach `qfr` (see `model-catalog.md`'s Stage-3 row and `plugin-catalog.md`'s Tensor Filter — Decision Rule). The native QNN `.bin` sibling (`qtimlqnn` with `backend="/usr/lib/libQnnHtp.so"`, `system="/usr/lib/libQnnSystem.so"`, no `delegate`) needs the identical six-name `tensors=` list for the same reason — see `model-catalog.md`'s "Chain-wide QNN cached-binary variant" note. Caution (secondary): a *different* build under the same reference name or filename pattern can export a different output contract (a different tensor count/shape) that `qfr`/`qfr-softmax` cannot decode regardless of `labels`/`settings`; only in that case fall back to a custom Python postprocess callback (`ml-postprocess.md`).
+- A stage's `settings=<path>` property can point to a JSON file that itself references further on-device file paths (e.g. companion binary data files) not visible anywhere in the generated app's own source. Read the referenced settings file's actual content to discover true device-file prerequisites; do not infer them solely from the app code that passes the settings path.
 
 ## AI Metadata Parser / Extractor
 
@@ -364,7 +366,7 @@ TODO. "Record to a file only while a person (or other class) is detected":
   `recording=True` flag; after N consecutive detection-free frames send
   `record_src.end_of_stream()` and stop. The video `AppSink` consumer pushes a
   **copied** buffer into the recorder only while `recording` is True:
-  `record_src.push_buffer(Buffer(gst_buffer=buf.take_gst_buffer().copy()))`.
+  `record_src.push_buffer(Buffer(gst_buffer=buf.get_raw_buffer().copy()))`.
 - Read buffers with `Buffer.data()` (`api-surface.md`). This is a dual-pipeline
   app — the README uses `flowchart TD` with a `subgraph` per pipeline
   (`artifact-contract.md`).

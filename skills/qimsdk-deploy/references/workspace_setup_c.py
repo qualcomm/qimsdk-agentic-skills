@@ -61,11 +61,11 @@ _CMAKE_BASE_FLAGS = (
 )
 
 # SDK download: detect arch on Linux workstation and download from codelinaro.org
-# x86_64 → x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip
-# aarch64 → arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip (unlikely for Linux workstation but handled)
+# x86_64 → x86-qli-2.1.1-standardsdk.zip
+# aarch64 → arm-qli-2.1.1-standardsdk.zip (unlikely for Linux workstation but handled)
 _SDK_BASE_URL = 'https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a'
-_SDK_ZIP_NAME_X86_64  = 'x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip'
-_SDK_ZIP_NAME_AARCH64 = 'arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip'
+_SDK_ZIP_NAME_X86_64  = 'x86-qli-2.1.1-standardsdk.zip'
+_SDK_ZIP_NAME_AARCH64 = 'arm-qli-2.1.1-standardsdk.zip'
 _SDK_SUBDIR   = 'qcom-sdk'  # Yocto SDK install dir; env script name is version-specific, discovered by glob
 _IMSDK_REPO   = 'https://github.com/qualcomm/qimsdk.git'
 _GST_SUBDIR   = 'gstreamer'  # gst-plugin-base, gst-sample-apps etc. live under this in the new repo layout
@@ -270,7 +270,7 @@ def _install_sdk(ssh_dc, build_dir, sdk_path=None):
       1. sdk_path, if given — either a .sh installer (already extracted, run
          directly) or a .zip (unzipped to find the .sh installer inside).
       2. A zip already present in {build_dir}:
-         sdk.zip (generic) or x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip / arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip
+         sdk.zip (generic) or x86-qli-2.1.1-standardsdk.zip / arm-qli-2.1.1-standardsdk.zip
          (arch-specific).
       3. wget from codelinaro.org (~3.5 GB). If that also fails (403, network
          blocked), reports clear manual download instructions.

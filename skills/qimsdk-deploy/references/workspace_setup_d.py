@@ -76,8 +76,8 @@ _SDK_BASE_URL = (
 
 # Arch-specific SDK zip filenames served under _SDK_BASE_URL — one per
 # workstation arch (mirrors Mode C's arch_zip_name lookup in workspace_setup_c.py).
-_SDK_ZIP_NAME_X86_64  = 'x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip'
-_SDK_ZIP_NAME_AARCH64 = 'arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip'
+_SDK_ZIP_NAME_X86_64  = 'x86-qli-2.1.1-standardsdk.zip'
+_SDK_ZIP_NAME_AARCH64 = 'arm-qli-2.1.1-standardsdk.zip'
 
 # Wrapper CMakeLists.txt for a standalone SDK-consumer build.
 #

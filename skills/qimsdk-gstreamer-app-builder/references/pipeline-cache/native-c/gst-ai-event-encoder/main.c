@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -49,8 +51,8 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_TFLITE_MODEL "/etc/models/yolox_quantized.tflite"
-#define DEFAULT_LABELS "/etc/labels/yolox.json"
+#define DEFAULT_TFLITE_MODEL "yolox_quantized.tflite"
+#define DEFAULT_LABELS "yolox.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -76,7 +78,7 @@
 /**
 * Default path of config file
 */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-event-encoder.json"
+#define DEFAULT_CONFIG_FILE "config-event-encoder.json"
 
 /**
 * Number of Queues used for buffer caching between elements
@@ -95,6 +97,24 @@
 #define DEFAULT_THRESHOLD_VALUE  40.0
 
 gboolean start_recording = FALSE;
+
+static gchar *
+build_recording_output_path (gint video_count)
+{
+  const gchar *home_dir = g_getenv ("HOME");
+  gchar *output_filename = g_strdup_printf ("output-%d.mp4", video_count);
+  gchar *output_path = NULL;
+
+  if (home_dir != NULL && home_dir[0] != '\0') {
+    output_path = g_build_filename (home_dir, "Downloads", "qimsdk_samples",
+        "media", output_filename, NULL);
+  } else {
+    //output_path = g_strdup (output_filename);
+  }
+
+  g_free (output_filename);
+  return output_path;
+}
 
 /**
  * RecordingPipelineState:
@@ -144,6 +164,7 @@ typedef struct
  */
 typedef struct
 {
+  gchar *artifacts_dir;
   gchar *file_path;
   gchar *rtsp_ip_port;
   gchar *model_path;
@@ -320,19 +341,20 @@ gst_app_context_free (GstAppsContext * appctx, GstAppOptions * options, gchar * 
     g_free ((gpointer) options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *) (&DEFAULT_TFLITE_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer) options->model_path);
   }
 
-  if (options->labels_path != (gchar *) (&DEFAULT_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer) options->labels_path);
   }
 
-  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer) options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer) config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline_main != NULL) {
@@ -410,7 +432,6 @@ appsink_detection (GstElement * appsink, gpointer user_data)
   const GValue *bbox_value = NULL;
   GstStructure *bbox_entry = NULL;
   gchar *label = NULL, *ctx = NULL;
-  gchar element_name[128];
   gchar *data = NULL, *token = NULL;
   GstFlowReturn ret = GST_FLOW_OK;
   guint size = 0, idx = 0, people_count = 0;
@@ -525,28 +546,34 @@ appsink_detection (GstElement * appsink, gpointer user_data)
           "filesink");
 
       appctx->video_count = appctx->video_count + 1;
-      snprintf (element_name, 127, "/etc/media/output-%d.mp4",
-          appctx->video_count);
-      g_object_set (G_OBJECT (filesink), "location", element_name, NULL);
-      g_object_set (G_OBJECT (filesink), "enable-last-sample", FALSE, NULL);
-      g_object_set (G_OBJECT (filesink), "async", FALSE, NULL);
+      gchar *output_path = build_recording_output_path (appctx->video_count);
+      if (output_path == NULL) {
+        g_printerr ("HOME env variable is not set. "
+            "Cannot create recording output path.\n");
+        appctx->recording_status = STOPPED;
+      } else {
+        g_object_set (G_OBJECT (filesink), "location", output_path, NULL);
+        g_free (output_path);
+        g_object_set (G_OBJECT (filesink), "enable-last-sample", FALSE, NULL);
+        g_object_set (G_OBJECT (filesink), "async", FALSE, NULL);
 
-      gst_element_get_state (appctx->pipeline_recoding, &state, NULL,
-          GST_CLOCK_TIME_NONE);
+        gst_element_get_state (appctx->pipeline_recoding, &state, NULL,
+            GST_CLOCK_TIME_NONE);
 
-      if (GST_STATE_CHANGE_ASYNC ==
-          gst_element_set_state (appctx->pipeline_recoding,
-              GST_STATE_PLAYING)) {
-        wait_for_state_change (appctx->pipeline_recoding);
+        if (GST_STATE_CHANGE_ASYNC ==
+            gst_element_set_state (appctx->pipeline_recoding,
+                GST_STATE_PLAYING)) {
+          wait_for_state_change (appctx->pipeline_recoding);
+        }
+
+        gst_element_get_state (appctx->pipeline_recoding, &state, NULL,
+            GST_CLOCK_TIME_NONE);
+
+        g_mutex_lock (&appctx->lock);
+        appctx->recording_pipeline_state = RUNNING;
+        g_mutex_unlock (&appctx->lock);
+        g_print ("Recording Started video_count=%d\n", appctx->video_count);
       }
-
-      gst_element_get_state (appctx->pipeline_recoding, &state, NULL,
-          GST_CLOCK_TIME_NONE);
-
-      g_mutex_lock (&appctx->lock);
-      appctx->recording_pipeline_state = RUNNING;
-      g_mutex_unlock (&appctx->lock);
-      g_print ("Recording Started video_count=%d\n", appctx->video_count);
     }
   }
   g_free (data);
@@ -1076,8 +1103,6 @@ create_pipe (GstAppsContext * appctx, GstAppOptions * options)
     goto error_clean_elements;
   }
   for (gint i = 0; i < DETECTION_COUNT; i++) {
-    g_object_set (G_OBJECT (qtimlvdetection[i]), "threshold",
-        options->threshold, NULL);
     g_object_set (G_OBJECT (qtimlvdetection[i]), "results", 10, NULL);
   }
 
@@ -1092,11 +1117,10 @@ create_pipe (GstAppsContext * appctx, GstAppOptions * options)
   g_object_set (G_OBJECT (fpsdisplaysink), "text-overlay", TRUE, NULL);
   g_object_set (G_OBJECT (fpsdisplaysink), "video-sink", waylandsink, NULL);
 
-  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — the qtivcomposer sink pad sizes the overlay tile.
+  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer
   pad_filter = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "RGBA", NULL);
+      "format", G_TYPE_STRING, "RGBA",
+      "width", G_TYPE_INT, 640, "height", G_TYPE_INT, 360, NULL);
 
   g_object_set (G_OBJECT (detection_filter), "caps", pad_filter, NULL);
   gst_caps_unref (pad_filter);
@@ -1130,8 +1154,14 @@ create_pipe (GstAppsContext * appctx, GstAppOptions * options)
   gst_element_set_enum_property (v4l2h264enc, "output-io-mode",
       "dmabuf-import");
 
-  snprintf (element_name, 127, "/etc/media/output-%d.mp4", appctx->video_count);
-  g_object_set (G_OBJECT (filesink), "location", element_name, NULL);
+  gchar *output_path = build_recording_output_path (appctx->video_count);
+  if (output_path == NULL) {
+    g_printerr ("HOME env variable is not set. "
+        "Cannot create recording output path.\n");
+    goto error_clean_elements;
+  }
+  g_object_set (G_OBJECT (filesink), "location", output_path, NULL);
+  g_free (output_path);
   g_object_set (G_OBJECT (filesink), "enable-last-sample", FALSE, NULL);
   g_object_set (G_OBJECT (filesink), "async", FALSE, NULL);
 
@@ -1401,6 +1431,9 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -1429,8 +1462,18 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename = json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -1439,13 +1482,33 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename = json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename = json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "threshold")) {
@@ -1489,9 +1552,11 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = { };
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
 
   // set default value
   options.file_path = NULL;
+  options.artifacts_dir = NULL;
   options.rtsp_ip_port = NULL;
   options.use_cpu = FALSE, options.use_gpu = FALSE, options.use_dsp = FALSE;
   options.use_file = FALSE, options.use_rtsp = FALSE, options.use_camera =
@@ -1515,6 +1580,7 @@ main (gint argc, gchar * argv[])
   };
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
+  home_dir = g_getenv ("HOME");
 
   camera_is_available = is_camera_available ();
 
@@ -1530,12 +1596,17 @@ main (gint argc, gchar * argv[])
       "  %s --config-file=%s\n"
       "\nThis Sample App demonstrates the use case of Video Encoding when"
       "person is detection in the frame, if there is no person, app will wait\n"
-      "for 5 sec and save the recording at /etc/media/output-1.mp4, "
-      "/etc/media/output-2 and so on. App will wait for next person event\n"
+      "for 5 sec and save the recording at "
+      "$HOME/Downloads/qimsdk_samples/media/output-1.mp4,\n"
+      "$HOME/Downloads/qimsdk_samples/media/output-2 and so on. "
+      "App will wait for next person event\n"
       "\nConfig file Fields:\n"
       "%s"
       "  file-path: \"/PATH\"\n"
       "      File source path\n"
+      "      The media file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
       "      Use this parameter to provide the rtsp input.\n"
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
@@ -1543,9 +1614,15 @@ main (gint argc, gchar * argv[])
       "  model: \"/PATH\"\n"
       "      This is an optional parameter and overrides default path\n"
       "      Default model path: " DEFAULT_TFLITE_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  labels: \"/PATH\"\n"
       "      This is an optional parameter and overrides default path\n"
       "      Default labels path: " DEFAULT_LABELS "\n"
+      "      The label files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  threshold: 0 to 100\n"
       "      This is an optional parameter and overides "
       "default threshold value 40\n"
@@ -1583,8 +1660,20 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -1592,6 +1681,9 @@ main (gint argc, gchar * argv[])
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
@@ -1678,12 +1770,14 @@ main (gint argc, gchar * argv[])
 
   // Set model path for execution
   if (options.model_path == NULL) {
-    options.model_path = DEFAULT_TFLITE_MODEL;
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", DEFAULT_TFLITE_MODEL, NULL);
   }
 
   // Set default label path for execution
   if (options.labels_path == NULL) {
-    options.labels_path = DEFAULT_LABELS;
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels", DEFAULT_LABELS, NULL);
   }
 
   if (!file_exists (options.model_path)) {

@@ -1,34 +1,37 @@
 cmake_minimum_required(VERSION 3.16)
+project(GST-ACTIVATE-DEACTIVATE-STREAM-RUNTIME LANGUAGES C CXX)
+
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+
+find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_ALLOC
-  REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_VIDEO
-  REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # GStreamer gst-activate-deactivate-streams-runtime-example
 set(GST_EXAMPLE_BIN gst-activate-deactivate-streams-runtime-example)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter")
+
 add_executable(${GST_EXAMPLE_BIN}
-  main.c
+  main.cc
 )
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-)
-
-target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
-  $<$<BOOL:${CODEC2_ENCODE}>:CODEC2_ENCODE>
+  ${GST_INCLUDE_DIRS}/gstreamer-1.0/gst/sampleapps/
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  pthread
   ${GST_LIBRARIES}
-  ${GST_VIDEO_LIBRARIES}
-  ${GST_ALLOC_LIBRARIES}
+  pthread
+  gstappsutils
 )
+
 
 install(
   TARGETS ${GST_EXAMPLE_BIN}

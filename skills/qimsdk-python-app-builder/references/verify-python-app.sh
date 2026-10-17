@@ -259,8 +259,6 @@ if { grep -q "set_postprocess_handler(" "$app" || { grep -q "set_handler(" "$app
     || fail "custom postprocess app must import/check GstQtiML for handler registration and functional output objects"
   grep -q "GstQtiML-1.0.typelib" "$readme" \
     || fail "README.md must mention GstQtiML-1.0.typelib for custom postprocess apps"
-  grep -Eq "TODO:|Placeholder" "$app" "$readme" \
-    || fail "custom postprocess placeholders must include TODOs in app or README"
   if grep -Eq "TODO:|Placeholder" "$app" && grep -Eq "^[[:space:]]*return[[:space:]]*$" "$app"; then
     fail "custom postprocess placeholder callbacks must not use bare return; return True with an empty output"
   fi

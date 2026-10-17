@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -43,8 +45,8 @@
  * Default model and video, if not provided by user
  */
 #define DEFAULT_TFLITE_MODEL \
-    "/etc/models/quicksrnetsmall_quantized.tflite"
-#define DEFAULT_INPUT_FILE_PATH "/etc/media/video.mp4"
+    "quicksrnetsmall_quantized.tflite"
+#define DEFAULT_INPUT_FILE_PATH "video.mp4"
 
 /**
  * Number of Queues used for buffer caching between elements
@@ -59,7 +61,7 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-superresolution.json"
+#define DEFAULT_CONFIG_FILE "config-superresolution.json"
 
 /**
  * Output dimensions of output stream
@@ -71,9 +73,10 @@
  * Structure for various application specific options
  */
 typedef struct {
-  const gchar *input_file_path;
-  const gchar *model_path;
-  const gchar *output_file_path;
+  gchar *artifacts_dir;
+  gchar *input_file_path;
+  gchar *model_path;
+  gchar *output_file_path;
   enum GstSinkType sink_type;
   gboolean display;
 } GstAppOptions;
@@ -105,20 +108,22 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     appctx->pipeline = NULL;
   }
 
-  if (options->model_path != (gchar *)(&DEFAULT_TFLITE_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer)options->model_path);
     options->model_path = NULL;
   }
 
-  if (options->input_file_path != (gchar *)(&DEFAULT_INPUT_FILE_PATH) &&
-      options->input_file_path != NULL) {
+  if (options->input_file_path != NULL) {
     g_free ((gpointer)options->input_file_path);
     options->input_file_path = NULL;
   }
 
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer)options->artifacts_dir);
+    options->artifacts_dir = NULL;
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer)config_file);
     config_file = NULL;
   }
@@ -392,7 +397,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions options)
 
   // 2.4 Set filter capabilities
   pad_filter = gst_caps_new_simple ("video/x-raw",
-    "format", G_TYPE_STRING, "RGB", NULL);
+    "format", G_TYPE_STRING, "RGBA", NULL);
   g_object_set (G_OBJECT (filter), "caps", pad_filter, NULL);
   gst_caps_unref (pad_filter);
 
@@ -567,6 +572,9 @@ parse_json(gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *output_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -589,18 +597,48 @@ parse_json(gchar * config_file, GstAppOptions * options)
   root_obj = json_node_get_object (root);
 
   if (json_object_has_member (root_obj, "input-file-path")) {
-    options->input_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "input-file-path"));
+    input_filename = json_object_get_string_member (root_obj, "input-file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->input_file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->input_file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename = json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "output-file-path")) {
-    options->output_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "output-file-path"));
+    output_filename = json_object_get_string_member (root_obj, "output-file-path");
+    if (g_path_is_absolute (output_filename)) {
+      options->output_file_path = g_strdup (output_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->output_file_path =
+          g_build_filename (options->artifacts_dir, "media", output_filename, NULL);
+    }
   }
 
   g_object_unref (parser);
@@ -619,12 +657,16 @@ main (gint argc, gchar * argv[])
   GstAppOptions options = {};
   GstAppContext appctx = {};
   gboolean ret = FALSE;
-  gchar help_description[1024];
+  gchar help_description[4096];
   guint intrpt_watch_id = 0;
 
+  const gchar *home_dir = NULL;
+
+  home_dir = g_getenv ("HOME");
   options.input_file_path = NULL;
   options.model_path = NULL;
   options.output_file_path = NULL;
+  options.artifacts_dir = NULL;
   options.display = FALSE;
 
   // Structure to define the user options selection
@@ -639,20 +681,30 @@ main (gint argc, gchar * argv[])
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
 
-  snprintf (help_description, 1023, "\nExample:\n"
+  snprintf (help_description, 4095, "\nExample:\n"
     "  %s --config-file=%s\n"
     "\nThis Sample App demonstrates super resolution on video stream\n"
     "\nConfig file Fields:\n"
     "  input-file-path: \"/PATH\"\n"
-    "      File source path\n"
-    "      Default file source path: " DEFAULT_INPUT_FILE_PATH "\n"
+    "      Path to the input media file.\n"
+    "      Default media file: " DEFAULT_INPUT_FILE_PATH "\n"
+    "      The media file should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/media\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path\n"
-    "      Default model path: " DEFAULT_TFLITE_MODEL"\n"
+    "      Path to superresolution model file.\n"
+    "      Default model file: " DEFAULT_TFLITE_MODEL"\n"
+    "      Model files should be placed in:\n"
+    "        $HOME/Downloads/qimsdk_samples/models\n"
+    "      Alternatively, provide an absolute file path.\n"
     "  output-file-path: \"/PATH\"\n"
-    "      Output file path. If not set, then display output is selected\n",
+    "      Output file path.\n"
+    "      For relative path, output will be saved under:\n"
+    "        $HOME/Downloads/qimsdk_samples/media\n"
+    "      Alternatively, provide an absolute file path.\n"
+    "      If not set, then display output is selected\n",
     app_name, DEFAULT_CONFIG_FILE);
-  help_description[1023] = '\0';
+  help_description[4095] = '\0';
 
   // Parse command line entries.
   if ((ctx = g_option_context_new (help_description)) != NULL) {
@@ -682,10 +734,25 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   // Choose default config file if config file not provided
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
   }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
+  }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (!file_exists (config_file)) {
     g_printerr ("Invalid config file path: %s\n", config_file);
@@ -716,13 +783,13 @@ main (gint argc, gchar * argv[])
   }
 
   if (options.input_file_path == NULL) {
-    g_print ("Using Default file: %s\n",DEFAULT_INPUT_FILE_PATH);
-    options.input_file_path = DEFAULT_INPUT_FILE_PATH;
+    options.input_file_path =
+        g_build_filename (options.artifacts_dir, "media", DEFAULT_INPUT_FILE_PATH, NULL);
   }
 
   if (options.model_path == NULL) {
-    g_print ("Using Default model: %s\n",DEFAULT_TFLITE_MODEL);
-    options.model_path = DEFAULT_TFLITE_MODEL;
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", DEFAULT_TFLITE_MODEL, NULL);
   }
 
   if (!file_exists (options.input_file_path)) {

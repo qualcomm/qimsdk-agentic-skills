@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -51,16 +53,16 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_QNN_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.bin"
-#define DEFAULT_QNN_FACE_LANDMARK_MODEL "/etc/models/facemap_3dmm_quantized.bin"
-#define DEFAULT_QNN_FACE_RECOGNITION_MODEL "/etc/models/face_attrib_net_quantized.bin"
-#define DEFAULT_TFLITE_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.tflite"
-#define DEFAULT_TFLITE_FACE_LANDMARK_MODEL "/etc/models/facemap_3dmm_quantized.tflite"
-#define DEFAULT_TFLITE_FACE_RECOGNITION_MODEL "/etc/models/face_attrib_net_quantized.tflite"
-#define DEFAULT_FACE_DETECTION_LABELS "/etc/labels/face_detection.json"
-#define DEFAULT_FACE_RECOGNITION_LABELS "/etc/labels/face_recognition.json"
-#define DEFAULT_FACEMAP_3DMM_SETTINGS "/etc/labels/facemap_3dmm_settings.json"
-#define DEFAULT_FACE_RECOGNITION_SETTINGS "/etc/labels/face_recognition_settings.json"
+#define DEFAULT_QNN_FACE_DETECTION_MODEL "face_det_lite_quantized.bin"
+#define DEFAULT_QNN_FACE_LANDMARK_MODEL "facemap_3dmm_quantized.bin"
+#define DEFAULT_QNN_FACE_RECOGNITION_MODEL "face_attrib_net_quantized.bin"
+#define DEFAULT_TFLITE_FACE_DETECTION_MODEL "face_det_lite_quantized.tflite"
+#define DEFAULT_TFLITE_FACE_LANDMARK_MODEL "facemap_3dmm_quantized.tflite"
+#define DEFAULT_TFLITE_FACE_RECOGNITION_MODEL "face_attrib_net_quantized.tflite"
+#define DEFAULT_FACE_DETECTION_LABELS "face_detection.json"
+#define DEFAULT_FACE_RECOGNITION_LABELS "face_recognition.json"
+#define DEFAULT_FACEMAP_3DMM_SETTINGS "facemap_3dmm_settings.json"
+#define DEFAULT_FACE_RECOGNITION_SETTINGS "face_recognition_settings.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -75,7 +77,7 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-face-recognition.json"
+#define DEFAULT_CONFIG_FILE "config-face-recognition.json"
 
 /**
  * Default value of Threshold for qtimlvdetection Plugin
@@ -141,6 +143,7 @@ typedef enum
  */
 typedef struct
 {
+  gchar *artifacts_dir;
   gchar *rtsp_ip_port;
   gchar *face_detection_model_path;
   gchar *face_landmark_model_path;
@@ -174,46 +177,40 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->face_detection_model_path !=
-      (gchar *) (&DEFAULT_QNN_FACE_DETECTION_MODEL)
-      && options->face_detection_model_path != NULL) {
+  if (options->face_detection_model_path != NULL) {
     g_free ((gpointer) options->face_detection_model_path);
   }
 
-  if (options->face_landmark_model_path !=
-      (gchar *) (&DEFAULT_QNN_FACE_LANDMARK_MODEL)
-      && options->face_landmark_model_path != NULL) {
+  if (options->face_landmark_model_path != NULL) {
     g_free ((gpointer) options->face_landmark_model_path);
   }
 
-  if (options->face_recognition_model_path !=
-      (gchar *) (&DEFAULT_QNN_FACE_RECOGNITION_MODEL)
-      && options->face_recognition_model_path != NULL) {
+  if (options->face_recognition_model_path != NULL) {
     g_free ((gpointer) options->face_recognition_model_path);
   }
 
-  if (options->face_detection_labels_path !=
-      (gchar *) (&DEFAULT_FACE_DETECTION_LABELS)
-      && options->face_detection_labels_path != NULL) {
+  if (options->face_detection_labels_path != NULL) {
     g_free ((gpointer) options->face_detection_labels_path);
   }
 
-  if (options->face_recognition_labels_path !=
-      (gchar *) (&DEFAULT_FACE_RECOGNITION_LABELS)
-      && options->face_recognition_labels_path != NULL) {
+  if (options->face_recognition_labels_path != NULL) {
     g_free ((gpointer) options->face_recognition_labels_path);
   }
 
-  if (options->face_recognition_settings !=
-      (gchar *) (&DEFAULT_FACE_RECOGNITION_SETTINGS)
-      && options->face_recognition_settings != NULL) {
+  if (options->face_recognition_settings != NULL) {
     g_free ((gpointer) options->face_recognition_settings);
   }
 
-  if (options->facemap_3dmm_settings !=
-      (gchar *) (&DEFAULT_FACEMAP_3DMM_SETTINGS)
-      && options->facemap_3dmm_settings != NULL) {
+  if (options->facemap_3dmm_settings != NULL) {
     g_free ((gpointer) options->facemap_3dmm_settings);
+  }
+
+  if (options->artifacts_dir != NULL) {
+    g_free (options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
+    g_free ((gpointer) config_file);
   }
 
   if (appctx->pipeline != NULL) {
@@ -271,11 +268,13 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   GstElement *detection_filter[DETECTION_FILTER_COUNT] = { NULL };
   GstElement *rtspsrc = NULL, *rtph264depay = NULL, *qtivoverlay = NULL;
   GstElement *v4l2h264dec_caps = NULL;
+  GstElement *videorate = NULL, *videorate_caps = NULL;
   GstElement *h264parse = NULL, *v4l2h264dec = NULL, *waylandsink = NULL;
   GstCaps *pad_filter = NULL, *filtercaps = NULL;
   GstStructure *delegate_options = NULL;
-  gboolean ret = FALSE;
-  gchar element_name[128], settings[128];
+  gboolean ret = FALSE, is_v66 = FALSE;
+  gchar element_name[128], settings[128], delegate_backend[128];
+  char * delegate_str = NULL;
   gint primary_camera_preview_width = PRIMARY_CAMERA_PREVIEW_OUTPUT_WIDTH;
   gint primary_camera_preview_height = PRIMARY_CAMERA_PREVIEW_OUTPUT_HEIGHT;
   gint secondary_camera_preview_width = SECONDARY_CAMERA_PREVIEW_OUTPUT_WIDTH;
@@ -283,6 +282,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   gint camera_framerate = DEFAULT_CAMERA_FRAME_RATE;
   gint module_id;
   GValue value = G_VALUE_INIT;
+
+  is_v66 = is_v66_arch ();
 
   // 1. Create the elements or Plugins
   if (options->use_rtsp) {
@@ -344,6 +345,21 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     queue[i] = gst_element_factory_make ("queue", element_name);
     if (!queue[i]) {
       g_printerr ("Failed to create queue %d\n", i);
+      goto error_clean_elements;
+    }
+  }
+
+  if (is_v66) {
+    videorate = gst_element_factory_make ("videorate", "videorate");
+    if (!videorate) {
+      g_printerr ("Failed to create videorate\n");
+      goto error_clean_elements;
+    }
+
+    videorate_caps = gst_element_factory_make ("capsfilter", "videorate_caps");
+
+    if (!videorate_caps) {
+      g_printerr ("Failed to create videorate_caps\n");
       goto error_clean_elements;
     }
   }
@@ -541,10 +557,18 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
       g_object_set (G_OBJECT (qtimlelement[i]), "backend",
           "/usr/lib/libQnnHtp.so", NULL);
     } else {
-      g_print ("Using DSP Delegate\n");
-      delegate_options =
-          gst_structure_from_string ("QNNExternalDelegate,backend_type=htp;",
-          NULL);
+      if (is_v66) {
+        snprintf (delegate_backend, sizeof (delegate_backend), "dsp");
+      } else {
+        snprintf (delegate_backend, sizeof (delegate_backend), "htp");
+      }
+      g_print ("Using backend: %s\n", delegate_backend);
+      delegate_str = g_strdup_printf (
+        "QNNExternalDelegate,backend_type=%s,"
+        "htp_performance_mode=(string)2,"
+        "htp_precision=(string)1;",
+        delegate_backend);
+      delegate_options = gst_structure_from_string (delegate_str, NULL);
       g_object_set (G_OBJECT (qtimlelement[i]), "delegate",
           GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
       g_object_set (G_OBJECT (qtimlelement[i]), "external-delegate-path",
@@ -552,6 +576,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
       g_object_set (G_OBJECT (qtimlelement[i]), "external-delegate-options",
           delegate_options, NULL);
       gst_structure_free (delegate_options);
+      g_free (delegate_str);
     }
   }
 
@@ -566,6 +591,15 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     g_object_set (G_OBJECT (detection_filter[i]), "caps", pad_filter, NULL);
   }
   gst_caps_unref (pad_filter);
+
+  if (is_v66) {
+    pad_filter = gst_caps_new_simple ("video/x-raw",
+      "framerate", GST_TYPE_FRACTION, 10, 1, NULL);
+
+    g_object_set (G_OBJECT (videorate_caps), "caps",
+      pad_filter, NULL);
+    gst_caps_unref (pad_filter);
+  }
 
   // 3. Setup the pipeline
   // 3.1 Adding elements to pipeline
@@ -602,13 +636,24 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
   }
 
+  if (is_v66) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), videorate,
+        videorate_caps, NULL);
+  }
+
   g_print ("Linking elements...\n");
 
   // 3.2 Create Pipeline for Face recognition
   if (options->use_rtsp) {
     // Linking RTSP source Stream
-    ret = gst_element_link_many (queue[0], rtph264depay, h264parse,
+    if (is_v66) {
+      ret = gst_element_link_many (queue[0], rtph264depay, h264parse,
+        v4l2h264dec, v4l2h264dec_caps, videorate, videorate_caps,
+        queue[1], tee[GST_FACE_DETECTION], NULL);
+    } else {
+      ret = gst_element_link_many (queue[0], rtph264depay, h264parse,
         v4l2h264dec, v4l2h264dec_caps, queue[1], tee[GST_FACE_DETECTION], NULL);
+    }
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for"
           "rtspsource->tee_face_detection\n");
@@ -617,8 +662,13 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
 
   } else {
     // Linking Camera Stream
-    ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_caps, queue[0],
+    if (is_v66) {
+      ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_caps,
+        videorate, videorate_caps, queue[0], tee[GST_FACE_DETECTION], NULL);
+    } else {
+      ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_caps, queue[0],
         tee[GST_FACE_DETECTION], NULL);
+    }
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for preview Stream, from"
           "qtiqmmfsrc->tee_face_detection\n");
@@ -717,13 +767,18 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   return TRUE;
 
 error_clean_pipeline:
+  if (videorate && !GST_OBJECT_PARENT(videorate))
+    gst_object_unref(videorate);
+  if (videorate_caps && !GST_OBJECT_PARENT(videorate_caps))
+    gst_object_unref(videorate_caps);
   gst_object_unref (appctx->pipeline);
   return FALSE;
 
 error_clean_elements:
   cleanup_gst (&qtiqmmfsrc, &qmmfsrc_caps, &qtimlvdetection, &qtimlvpose,
       &qtimlvclassification, &rtspsrc, &rtph264depay, &h264parse,
-      &v4l2h264dec, &v4l2h264dec_caps, &qtivoverlay, &waylandsink, NULL);
+      &v4l2h264dec, &v4l2h264dec_caps, &videorate, &videorate_caps,
+      &qtivoverlay, &waylandsink, NULL);
 
   for (gint i = 0; i < TEE_COUNT; i++) {
     if (tee[i]) {
@@ -773,6 +828,9 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
+  const gchar *settings_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -821,45 +879,122 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "face-detection-model")) {
-    options->face_detection_model_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-detection-model"));
+    model_filename = json_object_get_string_member (root_obj,
+        "face-detection-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->face_detection_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_detection_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename,
+          NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "face-landmark-model")) {
-    options->face_landmark_model_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-landmark-model"));
+    model_filename = json_object_get_string_member (root_obj,
+        "face-landmark-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->face_landmark_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_landmark_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename,
+          NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "face-recognition-model")) {
-    options->face_recognition_model_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-recognition-model"));
+    model_filename = json_object_get_string_member (root_obj,
+        "face-recognition-model");
+    if (g_path_is_absolute (model_filename)) {
+      options->face_recognition_model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_recognition_model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename,
+          NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "face-detection-labels")) {
-    options->face_detection_labels_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-detection-labels"));
+    label_filename = json_object_get_string_member (root_obj,
+        "face-detection-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->face_detection_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_detection_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename,
+          NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "face-recognition-labels")) {
-    options->face_recognition_labels_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-recognition-labels"));
+    label_filename = json_object_get_string_member (root_obj,
+        "face-recognition-labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->face_recognition_labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_recognition_labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename,
+          NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "face-recognition-settings")) {
-    options->face_recognition_settings =
-        g_strdup (json_object_get_string_member (root_obj,
-            "face-recognition-settings"));
+    settings_filename = json_object_get_string_member (root_obj,
+        "face-recognition-settings");
+    if (g_path_is_absolute (settings_filename)) {
+      options->face_recognition_settings = g_strdup (settings_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->face_recognition_settings =
+          g_build_filename (options->artifacts_dir, "labels",
+          settings_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "facemap-3dmm-settings")) {
-    options->facemap_3dmm_settings =
-        g_strdup (json_object_get_string_member (root_obj,
-            "facemap-3dmm-settings"));
+    settings_filename = json_object_get_string_member (root_obj,
+        "facemap-3dmm-settings");
+    if (g_path_is_absolute (settings_filename)) {
+      options->facemap_3dmm_settings = g_strdup (settings_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->facemap_3dmm_settings =
+          g_build_filename (options->artifacts_dir, "labels",
+          settings_filename, NULL);
+    }
   }
 
   g_object_unref (parser);
@@ -880,16 +1015,20 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = { };
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
+
+  home_dir = g_getenv ("HOME");
 
   // Set default value
   options.rtsp_ip_port = NULL;
   options.face_detection_model_path = NULL;
   options.face_landmark_model_path = NULL;
   options.face_recognition_model_path = NULL;
-  options.face_detection_labels_path = DEFAULT_FACE_DETECTION_LABELS;
-  options.face_recognition_labels_path = DEFAULT_FACE_RECOGNITION_LABELS;
-  options.facemap_3dmm_settings = DEFAULT_FACEMAP_3DMM_SETTINGS;
-  options.face_recognition_settings = DEFAULT_FACE_RECOGNITION_SETTINGS;
+  options.face_detection_labels_path = NULL;
+  options.face_recognition_labels_path = NULL;
+  options.facemap_3dmm_settings = NULL;
+  options.face_recognition_settings = NULL;
+  options.artifacts_dir = NULL;
   options.use_rtsp = FALSE, options.use_camera = FALSE;
   options.model_type = GST_MODEL_TYPE_TFLITE;
   options.camera_type = GST_CAMERA_TYPE_NONE;
@@ -928,43 +1067,76 @@ main (gint argc, gchar * argv[])
       "  ml-framework: \"tflite\" or \"qnn\"\n"
       "      Execute Model in TFlite [Default] or QNN format\n"
       "  Tflite Face detection model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face detection TFLITE Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face detection TFLITE Model:\n"
       DEFAULT_TFLITE_FACE_DETECTION_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  Tflite Face landmark model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face landmark TFLITE Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face landmark TFLITE Model:\n"
       DEFAULT_TFLITE_FACE_LANDMARK_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  Tflite Face recognition model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face landmark TFLITE Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face recognition TFLITE Model:\n"
       DEFAULT_TFLITE_FACE_RECOGNITION_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  QNN Face detection model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face detection QNN Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face detection QNN Model:\n"
       DEFAULT_QNN_FACE_DETECTION_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  QNN Face landmark model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face landmark QNN Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face landmark QNN Model:\n"
       DEFAULT_QNN_FACE_LANDMARK_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  QNN Face recognition model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for Face recognition QNN Model: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default model file for Face recognition QNN Model:\n"
       DEFAULT_QNN_FACE_RECOGNITION_MODEL "\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  Face detection labels: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default Face detection labels path: " DEFAULT_FACE_DETECTION_LABELS
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default Face detection labels file:\n" DEFAULT_FACE_DETECTION_LABELS
+      "\n"
+      "      The label/settings files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "\n" "  Face recognition labels: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default Face recognition labels path: "
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default Face recognition labels file:\n"
       DEFAULT_FACE_RECOGNITION_LABELS "\n"
+      "      The label/settings files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  Face map settings: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default Face map settings path: " DEFAULT_FACEMAP_3DMM_SETTINGS
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default Face map settings file:\n" DEFAULT_FACEMAP_3DMM_SETTINGS
+      "\n"
+      "      The label/settings files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "\n" "  Face recognition settings: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default Face recognition settings path: "
-      DEFAULT_FACE_RECOGNITION_SETTINGS, app_name,
+      "      This is an optional parameter and overrides default path.\n"
+      "      Default Face recognition settings file:\n"
+      DEFAULT_FACE_RECOGNITION_SETTINGS "\n"
+      "      The label/settings files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n",
+      app_name,
       DEFAULT_CONFIG_FILE, camera_description);
   help_description[8191] = '\0';
 
@@ -996,9 +1168,24 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
-  if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
   }
+
+  if (config_file == NULL) {
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
+  }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (!file_exists (config_file)) {
     g_printerr ("Invalid config file path: %s\n", config_file);
@@ -1072,28 +1259,56 @@ main (gint argc, gchar * argv[])
   // Set model path for execution
   if (options.face_detection_model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.face_detection_model_path = DEFAULT_QNN_FACE_DETECTION_MODEL;
+      options.face_detection_model_path =
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_QNN_FACE_DETECTION_MODEL, NULL);
     } else {
-      options.face_detection_model_path = DEFAULT_TFLITE_FACE_DETECTION_MODEL;
+      options.face_detection_model_path =
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_FACE_DETECTION_MODEL, NULL);
     }
   }
 
   if (options.face_landmark_model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.face_landmark_model_path = DEFAULT_QNN_FACE_LANDMARK_MODEL;
+      options.face_landmark_model_path =
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_QNN_FACE_LANDMARK_MODEL, NULL);
     } else {
-      options.face_landmark_model_path = DEFAULT_TFLITE_FACE_LANDMARK_MODEL;
+      options.face_landmark_model_path =
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_FACE_LANDMARK_MODEL, NULL);
     }
   }
 
   if (options.face_recognition_model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.face_recognition_model_path = DEFAULT_QNN_FACE_RECOGNITION_MODEL;
+      options.face_recognition_model_path =
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_QNN_FACE_RECOGNITION_MODEL, NULL);
     } else {
       options.face_recognition_model_path =
-          DEFAULT_TFLITE_FACE_RECOGNITION_MODEL;
+          g_build_filename (options.artifacts_dir, "models",
+            DEFAULT_TFLITE_FACE_RECOGNITION_MODEL, NULL);
     }
   }
+
+  if (options.face_detection_labels_path == NULL)
+    options.face_detection_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+          DEFAULT_FACE_DETECTION_LABELS, NULL);
+  if (options.face_recognition_labels_path == NULL)
+    options.face_recognition_labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+          DEFAULT_FACE_RECOGNITION_LABELS, NULL);
+  if (options.facemap_3dmm_settings == NULL)
+    options.facemap_3dmm_settings =
+        g_build_filename (options.artifacts_dir, "labels",
+          DEFAULT_FACEMAP_3DMM_SETTINGS, NULL);
+  if (options.face_recognition_settings == NULL)
+    options.face_recognition_settings =
+        g_build_filename (options.artifacts_dir, "labels",
+          DEFAULT_FACE_RECOGNITION_SETTINGS, NULL);
 
   if (!file_exists (options.face_detection_model_path)) {
     g_print ("Invalid model file path: %s\n",

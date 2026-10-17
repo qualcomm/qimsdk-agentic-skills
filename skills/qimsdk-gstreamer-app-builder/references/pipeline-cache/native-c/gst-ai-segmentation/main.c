@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -43,12 +45,12 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_SNPE_SEGMENTATION_MODEL "/etc/models/deeplabv3_resnet50.dlc"
+#define DEFAULT_SNPE_SEGMENTATION_MODEL "deeplabv3_plus_mobilenet.dlc"
 #define DEFAULT_TFLITE_SEGMENTATION_MODEL \
-    "/etc/models/deeplabv3_plus_mobilenet_quantized.tflite"
+    "deeplabv3_plus_mobilenet_quantized.tflite"
 #define DEFAULT_QNN_SEGMENTATION_MODEL \
-    "/etc/models/deeplabv3_plus_mobilenet_quantized.bin"
-#define DEFAULT_SEGMENTATION_LABELS "/etc/labels/deeplabv3_resnet50.json"
+    "deeplabv3_plus_mobilenet_quantized.bin"
+#define DEFAULT_SEGMENTATION_LABELS "deeplabv3_resnet50.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -65,7 +67,7 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config_segmentation.json"
+#define DEFAULT_CONFIG_FILE "config_segmentation.json"
 
 /**
  * Number of Queues used for buffer caching between elements
@@ -82,6 +84,7 @@
  */
 typedef struct
 {
+  const gchar *artifacts_dir;
   gchar *file_path;
   gchar *rtsp_ip_port;
   gchar *model_path;
@@ -121,21 +124,20 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
     g_free ((gpointer) options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *) (&DEFAULT_SNPE_SEGMENTATION_MODEL) &&
-      options->model_path != (gchar *) (&DEFAULT_TFLITE_SEGMENTATION_MODEL) &&
-      options->model_path != (gchar *) (&DEFAULT_QNN_SEGMENTATION_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer) options->model_path);
   }
 
-  if (options->labels_path != (gchar *) (&DEFAULT_SEGMENTATION_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer) options->labels_path);
   }
 
-  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer) options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer) config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -504,7 +506,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     } else if (options->use_dsp) {
       g_print ("Using DSP Delegate");
       delegate_options =
-          gst_structure_from_string ("QNNExternalDelegate,backend_type=htp;",
+          gst_structure_from_string ("QNNExternalDelegate,backend_type=htp,"
+          "htp_performance_mode=(string)2,"
+          "htp_precision=(string)1;",
           NULL);
       g_object_set (G_OBJECT (qtimlelement), "model", options->model_path,
           "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
@@ -549,11 +553,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   g_object_set (G_OBJECT (fpsdisplaysink), "text-overlay", TRUE, NULL);
   g_object_set (G_OBJECT (fpsdisplaysink), "video-sink", waylandsink, NULL);
 
-  // Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // Set the properties of pad_filter for negotiation with qtivcomposer
   pad_filter = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "RGBA", NULL);
 
@@ -765,6 +765,9 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -793,8 +796,19 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -838,13 +852,35 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "runtime")) {
@@ -882,12 +918,17 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = { };
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
+  const gchar *model_filename = NULL;
+
+  home_dir = g_getenv ("HOME");
 
   // Set default value
+  options.artifacts_dir = NULL;
   options.model_path = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.labels_path = DEFAULT_SEGMENTATION_LABELS;
+  options.labels_path = NULL;
   options.use_cpu = FALSE, options.use_gpu = FALSE, options.use_dsp = FALSE;
   options.use_file = FALSE, options.use_rtsp = FALSE, options.use_camera =
       FALSE;
@@ -976,8 +1017,20 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -985,6 +1038,9 @@ main (gint argc, gchar * argv[])
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
@@ -1093,13 +1149,22 @@ main (gint argc, gchar * argv[])
   }
   // Set model path for execution
   if (options.model_path == NULL) {
-    if (options.model_type == GST_MODEL_TYPE_SNPE)
-      options.model_path = DEFAULT_SNPE_SEGMENTATION_MODEL;
-    else if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.model_path = DEFAULT_QNN_SEGMENTATION_MODEL;
+    if (options.model_type == GST_MODEL_TYPE_SNPE) {
+      model_filename = DEFAULT_SNPE_SEGMENTATION_MODEL;
+    } else if (options.model_type == GST_MODEL_TYPE_QNN) {
+      model_filename = DEFAULT_QNN_SEGMENTATION_MODEL;
     } else {
-      options.model_path = DEFAULT_TFLITE_SEGMENTATION_MODEL;
+      model_filename = DEFAULT_TFLITE_SEGMENTATION_MODEL;
     }
+
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
+  }
+
+  if (options.labels_path == NULL) {
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_SEGMENTATION_LABELS, NULL);
   }
 
   if (!file_exists (options.model_path)) {

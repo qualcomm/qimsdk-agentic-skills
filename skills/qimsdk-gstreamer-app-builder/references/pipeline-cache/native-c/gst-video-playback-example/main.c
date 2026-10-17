@@ -1,7 +1,10 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #include <stdio.h>
+#include <glib/gstdio.h>
 #include <glib-unix.h>
 
 #include <gst/gst.h>
@@ -18,7 +21,9 @@
 
 #define GST_APP_CONTEXT_CAST(obj)           ((GstAppContext*)(obj))
 
-#define DEFAULT_INPUT_FILESOURCE  "/etc/media/video_avc.mp4"
+#define DEFAULT_INPUT_FILESOURCE \
+  (g_build_filename (g_get_home_dir (), "Downloads", "qimsdk_samples", \
+      "media", "video_avc.mp4", NULL))
 
 #define GST_APP_SUMMARY \
   "This application enables users to create and utilize a video pipeline " \
@@ -619,6 +624,31 @@ main_menu (gpointer userdata)
   return NULL;
 }
 
+static gboolean
+create_default_media_dir (void)
+{
+  gchar *media_dir = NULL;
+  gboolean ret = FALSE;
+
+  media_dir = g_build_filename (g_get_home_dir (),
+      "Downloads", "qimsdk_samples", "media", NULL);
+
+  if (media_dir == NULL) {
+    g_printerr ("\nUnable to build default media directory path. Exiting.\n");
+    return FALSE;
+  }
+
+  if (g_mkdir_with_parents (media_dir, 0755) != 0) {
+    g_printerr ("\nUnable to create media directory: %s. Exiting.\n",
+        media_dir);
+  } else {
+    ret = TRUE;
+  }
+
+  g_free (media_dir);
+  return ret;
+}
+
 gint
 main (gint argc, gchar * argv[])
 {
@@ -629,6 +659,7 @@ main (gint argc, gchar * argv[])
   GThread *mthread = NULL;
   GError *error = NULL;
   gchar **pipeline = NULL;
+  gchar *default_input_file = NULL;
   guint bus_watch_id = 0, intrpt_watch_id = 0, stdin_watch_id = 0;
   gint status = -1;
 
@@ -668,10 +699,22 @@ main (gint argc, gchar * argv[])
   }
 
   if (pipeline == NULL) {
-    gchar *default_pipeline_str =
+    gchar *default_pipeline_str = NULL;
+
+    if (!create_default_media_dir ()) {
+      goto exit;
+    }
+
+    default_input_file = DEFAULT_INPUT_FILESOURCE;
+    if (default_input_file == NULL) {
+      g_printerr ("\nUnable to build default input file path. Exiting.\n");
+      goto exit;
+    }
+
+    default_pipeline_str =
         g_strdup_printf
         ("filesrc location=%s ! qtdemux ! queue ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! video/x-raw,format=NV12 ! waylandsink enable-last-sample=false fullscreen=true",
-        DEFAULT_INPUT_FILESOURCE);
+        default_input_file);
     appctx->pipeline = gst_parse_launch (default_pipeline_str, &error);
     g_free (default_pipeline_str);
     if (appctx->pipeline == NULL) {
@@ -744,6 +787,7 @@ main (gint argc, gchar * argv[])
   status = 0;
 
 exit:
+  g_free (default_input_file);
   g_strfreev (pipeline);
 
   gst_app_context_free (appctx);

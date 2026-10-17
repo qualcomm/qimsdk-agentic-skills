@@ -1,0 +1,8 @@
+{
+  "Version": "1.4",
+  "ApplicationName": "gst-fastcv-padding-strip-example",
+  "ApplicationType": "Camera",
+  "ApplicationSourceCheckSum": "",
+  "ApplicationIcon": "",
+  "ApplicationTextDescription": "This application Demonstrates Strips hardware-aligned padding from an NV12 buffer using stride and plane offset information and dump into YUV file."
+}

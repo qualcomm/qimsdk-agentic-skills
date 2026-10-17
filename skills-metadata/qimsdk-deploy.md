@@ -1,6 +1,6 @@
 ---
 id: qimsdk.deploy
-version: 1.0
+version: 1.1
 status: draft
 tech_area: [qimsdk, deployment, device_execution]
 skill_category: deployment

@@ -39,6 +39,7 @@ Use this skill when the user asks for C++ application development with the QIM S
 - Do not hardcode element instance names; use user-provided names when available, otherwise use neutral placeholders and keep names consistent across `add(...)`, `get(...)`, and `link(...)`.
 - For element retrieval, use `pipeline.get("name")` for generic `qti::Element`; use `get<T>` only for wrappers that support typed retrieval in this SDK.
 - Use `pipeline.execute()` as the default run pattern for generated apps; use `start()/wait()/stop()` only when the user explicitly asks for staged lifecycle control.
+- `Pipeline::generate_graph(filename)` writes a GraphViz `.dot` graph of the resolved GStreamer topology, not draw.io XML.
 - If the user provides concrete values (for example module names, file paths, labels, settings, thresholds), carry them into generated code directly.
 - Use placeholders only for fields the user did not provide and that cannot be confirmed from SDK references.
 - For `qtimlpostprocess`, use SDK property keys directly (`module`, `labels`, `settings`). `settings` is optional by default; include it when user provides postprocess config/settings or threshold-style tuning. Keep placeholders only for unresolved values.

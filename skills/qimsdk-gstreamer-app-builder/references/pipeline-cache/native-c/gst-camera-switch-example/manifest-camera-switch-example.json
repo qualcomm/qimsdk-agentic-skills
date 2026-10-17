@@ -6,3 +6,4 @@
   "ApplicationIcon": "",
   "ApplicationTextDescription": "This application uses the two cameras of the device and switch them without changing the state of the pipeline. The switching is done in playing state every 5 seconds."
 }
+

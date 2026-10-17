@@ -14,12 +14,13 @@ As the deploy skill's preflight subcommand (interactive):
   python preflight_check.py --mode A
   python preflight_check.py --mode B
   python preflight_check.py --mode C
+  python preflight_check.py --mode M --artifact-path <imsdk-postproc-module-dir>
 
 From the eval skill (before KPI 1 runs):
   python preflight_check.py --mode A
 
 From any other skill or script:
-  python preflight_check.py --mode <A|B|C>
+  python preflight_check.py --mode <A|B|C|P|D|M>
   # exit code: 0 = ready, 1 = not ready
 
 ── Credentials (configs/.env) ───────────────────────────────────────────────────
@@ -43,6 +44,14 @@ Mode C additional:
   LINUX_WORKSTATION_USER=<username>
   LINUX_WORKSTATION_KEY=~/.ssh/id_ed25519_workstation
   LINUX_WORKSTATION_BUILD_DIR=<path-to-build-dir>  (Yocto SDK env script must be at {BUILD_DIR}/qcom-sdk/environment-setup-*-qcom-linux and qimsdk must be at {BUILD_DIR}/qimsdk/)
+
+Mode M additional (both optional):
+  DEVICE_MODELS_DIR=/root/models    where the model file is pushed
+  DEVICE_LABELS_DIR=/root/labels    where labels/settings are pushed
+  DEVICE_USER must be root — QLI images ship without sudo, so no other account can
+  write the qtimlpostprocess module directory. Mode M is also the one mode that does
+  not require a Windows host: it cross-compiles locally on this Linux/WSL machine
+  (see workspace_setup_m.py), so the Windows-host check is skipped for it.
 
 ── Behavior on failure ───────────────────────────────────────────────────────────
 
@@ -256,6 +265,8 @@ def check_local_artifact(artifact_path, mode):
     Verify the local artifact folder exists and contains the required files.
     Mode B/C: needs main.c + CMakeLists.txt + README.md
     Mode A:   needs pipeline.sh + README.md
+    Mode M:   needs ml-postprocess-<module>.cc + CMakeLists.txt (no README required —
+              a post-process module artifact is a library, not a runnable app)
     """
     p = pathlib.Path(artifact_path)
     if not p.exists():
@@ -273,6 +284,24 @@ def check_local_artifact(artifact_path, mode):
         required = ['main.c', 'CMakeLists.txt', 'README.md']
     elif mode == 'D':
         required = ['main.cc', 'CMakeLists.txt', 'README.md']
+    elif mode == 'M':
+        # The library filename is the module's identity, so the source must be named
+        # ml-postprocess-<module>.cc — workspace_setup_m.py gates on that.
+        sources = sorted(p.glob('ml-postprocess-*.cc'))
+        if not sources:
+            return False, (
+                f'Artifact folder {artifact_path} has no ml-postprocess-<module>.cc — '
+                f'expected an imsdk-postproc-<module>/ artifact from '
+                f'qimsdk-model-onboarding.'
+            )
+        if len(sources) > 1:
+            return False, (
+                f'Artifact folder {artifact_path} has more than one ml-postprocess-*.cc '
+                f'({", ".join(s.name for s in sources)}) — one module per artifact.'
+            )
+        if not (p / 'CMakeLists.txt').exists():
+            return False, f'Artifact folder {artifact_path} is missing: CMakeLists.txt.'
+        return True, f'{artifact_path} — {sources[0].name}, CMakeLists.txt present'
     elif mode == 'P':
         # python-app-builder emits main.py; app.py accepted as legacy fallback.
         if not ((p / 'main.py').exists() or (p / 'app.py').exists()):
@@ -790,6 +819,77 @@ def check_device_usr_bin_writable(client):
     return False, '/usr/bin is read-only and could not be made writable. Run `mount -o remount,rw /usr` manually.'
 
 
+# ── Mode M — host cross-toolchain + device module checks ─────────────────────────────
+
+def check_mode_m_host(artifact_path, imsdk_include=None):
+    """Mode M host side: cross-compiler, cmake/make/binutils, artifact shape, headers.
+
+    Delegates to workspace_setup_m.run_preflight — the same code path the build itself
+    runs, so preflight cannot pass an environment the build would then reject. Returns
+    (all_ok, [(severity, message)]) where severity is 'ok' | 'warn' | 'fail'.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    try:
+        import workspace_setup_m as wsm
+    except ImportError as e:
+        return False, [('fail', f'workspace_setup_m.py is not importable: {e}')]
+
+    report, checks = wsm.run_preflight(artifact_path, imsdk_include)
+    lines = []
+    for c in checks:
+        sev = 'ok' if (c.ok and not c.warn) else ('warn' if c.warn else 'fail')
+        msg = f'{c.name:<24} {c.detail}'
+        if c.remedy and sev != 'ok':
+            msg += f'\n       -> {c.remedy}'
+        lines.append((sev, msg))
+    if report['module_name']:
+        lines.append(('ok', f'module identity resolved: module={report["module_name"]} '
+                            f'-> {report["lib_filename"]}'))
+    return report['passed'], lines
+
+
+def check_device_qtimlpostprocess(client):
+    """Mode M: the plugin must exist on the device or no module can ever load."""
+    out = _ssh_run(client, 'gst-inspect-1.0 qtimlpostprocess 2>&1 | head -40')
+    if not out or 'No such element' in out:
+        return False, (
+            'qtimlpostprocess is not available on this device, so a post-process module '
+            'cannot load there at all. It ships in QLI 2.0. If the image has only the '
+            'older split plugin family (qtimlvdetection, qtimlvclassification, …), that '
+            'is a different module contract — not a deployment problem.'
+        )
+    m = re.search(r'^\s*Filename\s*:?\s+(\S+)', out, re.MULTILINE)
+    where = f' (plugin {m.group(1)})' if m else ''
+    return True, f'qtimlpostprocess present{where}'
+
+
+def check_device_root(client):
+    """Mode M: DEVICE_USER must be root — QLI images have no sudo."""
+    uid = _ssh_run(client, 'id -u').strip()
+    if uid == '0':
+        return True, 'DEVICE_USER is root (uid 0) — can write the module directory'
+    return False, (
+        f'Connected as uid {uid or "?"}, not root. QLI images ship without sudo, so only '
+        f'root can write the qtimlpostprocess module directory and the model/label dirs. '
+        f'Set DEVICE_USER=root in configs/.env.'
+    )
+
+
+def check_device_module_tools(client):
+    """Mode M: optional device diagnostics. Absence degrades a diagnostic, never the install."""
+    missing = [t for t in ('strings', 'ldd', 'df')
+               if _ssh_run(client, f'command -v {t} >/dev/null 2>&1 && echo YES || echo NO')
+               .strip() != 'YES']
+    if not missing:
+        return True, 'strings, ldd, df present (module dir derivation, dep check, space warning)'
+    return False, (
+        f'Optional device tools missing: {", ".join(missing)}. '
+        f'strings absent → the module directory falls back to the default path and the '
+        f'result says it was assumed; ldd absent → the dependency check is reported as '
+        f'unavailable; df absent → the free-space warning is skipped. None is required.'
+    ), 'warn'
+
+
 def check_source_root(client, source_root):
     """Check QIMSDK source tree and gst-sample-apps exist on device."""
     out = _ssh_run(
@@ -1138,10 +1238,16 @@ def run(mode, device_ip, device_user, host_key,
 
     # ── 1. Python + deps ─────────────────────────────────────────────────────
     section('Environment')
-    host_ok, host_msg = check_host_platform()
-    add(ok(host_msg) if host_ok else fail(host_msg))
-    if not host_ok:
-        stop()
+    # Mode M is the one mode that does not need a Windows host: it cross-compiles
+    # locally on this Linux/WSL machine instead of driving a remote workstation.
+    if mode == 'M':
+        add(ok(f'Host platform {sys.platform!r} — Mode M builds locally, '
+               f'no Windows host required'))
+    else:
+        host_ok, host_msg = check_host_platform()
+        add(ok(host_msg) if host_ok else fail(host_msg))
+        if not host_ok:
+            stop()
 
     py_ok, py_msg = check_python()
     add(ok(py_msg) if py_ok else fail(py_msg))
@@ -1175,6 +1281,13 @@ def run(mode, device_ip, device_user, host_key,
         if not art_ok:
             all_ok = False
             stop()
+    elif mode == 'M':
+        # Mode M's host checks (module identity, headers) are artifact-relative, so
+        # there is nothing meaningful to verify without one.
+        add(fail('Mode M requires --artifact-path <imsdk-postproc-module-dir> — the '
+                 'toolchain and header checks are relative to the artifact.'))
+        all_ok = False
+        stop()
     else:
         add(warn(
             'No artifact path provided — skipping artifact check. '
@@ -1195,6 +1308,16 @@ def run(mode, device_ip, device_user, host_key,
         add(ok(tmp_msg) if tmp_ok else fail(tmp_msg))
         if not tmp_ok:
             all_ok = False
+
+    # ── 5b. Mode M host cross-toolchain (local build — no workstation) ───────
+    if mode == 'M':
+        section('Mode M — Host Cross-Toolchain and Module Headers')
+        m_ok, m_lines = check_mode_m_host(artifact_path)
+        for sev, msg in m_lines:
+            add(ok(msg) if sev == 'ok' else (warn(msg) if sev == 'warn' else fail(msg)))
+        if not m_ok:
+            all_ok = False
+            stop()
 
     # ── 6. Device credentials ─────────────────────────────────────────────────
     section('Device Credentials')
@@ -1550,6 +1673,46 @@ def run(mode, device_ip, device_user, host_key,
                             add(fail(f'{expanded} — not found on device'))
                             all_ok = False
 
+        elif mode == 'M':
+            section('Mode M — Post-Process Module Device Checks')
+
+            # Root first: without it nothing below can be written, and the reason is
+            # structural (QLI images have no sudo), not something deploy works around.
+            root_ok, root_msg = check_device_root(device_client)
+            add(ok(root_msg) if root_ok else fail(root_msg))
+            if not root_ok:
+                all_ok = False
+
+            # The plugin must exist, or no module can ever load on this image.
+            pp_ok, pp_msg = check_device_qtimlpostprocess(device_client)
+            add(ok(pp_msg) if pp_ok else fail(pp_msg))
+            if not pp_ok:
+                all_ok = False
+
+            # Optional diagnostics — WARN only.
+            tools_result = check_device_module_tools(device_client)
+            tools_ok, tools_msg = tools_result[0], tools_result[1]
+            tools_warn = len(tools_result) == 3 and tools_result[2] == 'warn'
+            add(ok(tools_msg) if tools_ok
+                else (warn(tools_msg) if tools_warn else fail(tools_msg)))
+
+            # Model/labels destinations — deploy creates them on demand, so a missing
+            # directory is fine; an unwritable parent is not.
+            for key, default in (('DEVICE_MODELS_DIR', '/root/models'),
+                                 ('DEVICE_LABELS_DIR', '/root/labels')):
+                d = os.environ.get(key, '') or default
+                probe = _ssh_run(
+                    device_client,
+                    f'mkdir -p "{d}" 2>/dev/null && touch "{d}/.preflight_write_test" '
+                    f'2>/dev/null && rm -f "{d}/.preflight_write_test" && echo OK || echo RO'
+                ).strip()
+                if 'OK' in probe:
+                    add(ok(f'{key}={d} — writable'))
+                else:
+                    add(fail(f'{key}={d} — cannot create or write. Check the path and '
+                             f'that the device filesystem is not read-only.'))
+                    all_ok = False
+
     finally:
         device_client.close()
 
@@ -1725,9 +1888,10 @@ def run(mode, device_ip, device_user, host_key,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='qimsdk-deploy pre-flight check')
-    parser.add_argument('--mode', required=True, choices=['A', 'B', 'C', 'P', 'D'],
+    parser.add_argument('--mode', required=True, choices=['A', 'B', 'C', 'P', 'D', 'M'],
                         help='Deploy mode: A (gst-launch), B (Ubuntu on-device build), C (host build, '
-                             'gstreamer-app-builder), P (Python qimsdk app), D (host build, cpp-app-builder)')
+                             'gstreamer-app-builder), P (Python qimsdk app), D (host build, cpp-app-builder), '
+                             'M (post-process module — local cross-compile + device install)')
     parser.add_argument('--device-ip',   default=os.environ.get('DEVICE_IP', ''),
                         help='Device IP (or DEVICE_IP in configs/.env)')
     parser.add_argument('--device-user', default=os.environ.get('DEVICE_USER', ''),

@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -59,12 +61,12 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_SNPE_CLASSIFICATION_MODEL "/etc/models/inceptionv3.dlc"
+#define DEFAULT_SNPE_CLASSIFICATION_MODEL "inceptionv3.dlc"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
-    "/etc/models/inception_v3_quantized.tflite"
-#define DEFAULT_QNN_CLASSIFICATION_MODEL "/etc/models/inception_v3_quantized.bin"
-#define DEFAULT_ONNX_CLASSIFICATION_MODEL "/etc/models/inceptionv3.onnx"
-#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.json"
+    "inception_v3_quantized.tflite"
+#define DEFAULT_QNN_CLASSIFICATION_MODEL "inception_v3_quantized.bin"
+#define DEFAULT_ONNX_CLASSIFICATION_MODEL "inceptionv3.onnx"
+#define DEFAULT_CLASSIFICATION_LABELS "classification.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -81,7 +83,7 @@
 #define USB_CAMERA_OUTPUT_WIDTH 1280
 #define USB_CAMERA_OUTPUT_HEIGHT 720
 #define DEFAULT_CAMERA_FRAME_RATE 30
-#define DEFAULT_OUTPUT_FILENAME "/etc/media/output_classification.mp4"
+#define DEFAULT_OUTPUT_FILENAME "output_classification.mp4"
 #define DEFAULT_IP "127.0.0.1"
 #define DEFAULT_PORT "8900"
 #define MAX_VID_DEV_CNT 64
@@ -89,12 +91,12 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config_classification.json"
+#define DEFAULT_CONFIG_FILE "config_classification.json"
 
 /**
  * To enable softmax operation for post processing
  */
-#define GST_VIDEO_CLASSIFICATION_OPERATION_SOFTMAX 1
+#define GST_ML_CLASSIFICATION_OPERATION_SOFTMAX 1
 
 /**
  * Number of Queues used for buffer caching between elements
@@ -115,6 +117,7 @@
  * Structure for various application specific options
  */
 typedef struct {
+  gchar *artifacts_dir;
   gchar *file_path;
   gchar *rtsp_ip_port;
   gchar *model_path;
@@ -159,7 +162,8 @@ static GstVideoRectangle position_data[2] = {
  * @param config_file Path to config file
  */
 static void
-gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
+  gchar * config_file)
 {
   // If specific pointer is not NULL, unref it
   if (appctx->mloop != NULL) {
@@ -175,21 +179,15 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *)(&DEFAULT_SNPE_CLASSIFICATION_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_CLASSIFICATION_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_QNN_CLASSIFICATION_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_ONNX_CLASSIFICATION_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer)options->model_path);
   }
 
-  if (options->labels_path != (gchar *)(&DEFAULT_CLASSIFICATION_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer)options->labels_path);
   }
 
-  if (options->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME) &&
-      options->output_file != NULL) {
+  if (options->output_file != NULL) {
     g_free ((gpointer)options->output_file);
   }
 
@@ -203,10 +201,12 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->port_num);
   }
 
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer)options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer)config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -865,13 +865,11 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     goto error_clean_elements;
   }
 
-  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // 2.9 Set the properties of pad_filter for negotiation with qtivcomposer
   pad_filter = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "RGBA", NULL);
+      "format", G_TYPE_STRING, "RGBA",
+      "width", G_TYPE_INT, 640,
+      "height", G_TYPE_INT, 360, NULL);
 
   g_object_set (G_OBJECT (classification_filter), "caps", pad_filter, NULL);
   gst_caps_unref (pad_filter);
@@ -1147,12 +1145,16 @@ error_clean_pipeline:
  * @param options Application specific options
  */
 gint
-parse_json(gchar * config_file, GstAppOptions * options)
+parse_json (gchar * config_file, GstAppOptions * options)
 {
   JsonParser *parser = NULL;
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *output_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -1183,8 +1185,19 @@ parse_json(gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -1227,19 +1240,52 @@ parse_json(gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "output-file")) {
-    options->output_file =
-        g_strdup (json_object_get_string_member (root_obj, "output-file"));
+    output_filename =
+        json_object_get_string_member (root_obj, "output-file");
+    if (g_path_is_absolute (output_filename)) {
+      options->output_file = g_strdup (output_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->output_file =
+          g_build_filename (options->artifacts_dir, "media", output_filename, NULL);
+    }
     g_print ("Output File Name : %s\n", options->output_file);
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr("Invalid artifacts directory");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "threshold")) {
@@ -1345,12 +1391,18 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = {};
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *labels_filename = NULL;
 
   // Set default value
+  home_dir = g_getenv ("HOME");
+
+  options.artifacts_dir = NULL;
   options.model_path = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.labels_path = DEFAULT_CLASSIFICATION_LABELS;
+  options.labels_path = NULL;
   options.use_cpu = FALSE, options.use_gpu = FALSE, options.use_dsp = FALSE;
   options.use_file = FALSE, options.use_rtsp = FALSE, options.use_camera = FALSE;
   options.is_camx_available = FALSE;
@@ -1363,7 +1415,7 @@ main (gint argc, gchar * argv[])
   options.height = USB_CAMERA_OUTPUT_HEIGHT;
   options.video_format = GST_NV12_VIDEO_FORMAT;
   options.sinktype = GST_WAYLANDSINK;
-  options.output_file = DEFAULT_OUTPUT_FILENAME;
+  options.output_file = NULL;
   options.output_ip_address = DEFAULT_IP;
   options.port_num = DEFAULT_PORT;
   options.framerate = DEFAULT_CAMERA_FRAME_RATE;
@@ -1399,9 +1451,12 @@ main (gint argc, gchar * argv[])
       "  %s --config-file=%s\n"
       "\nThis Sample App demonstrates Classification on Stream\n"
       "\nConfig file Fields:\n"
-      "  %s"
+      "  %s\n"
       "  file-path: \"/PATH\"\n"
-      "      File source path\n"
+      "      Path to the input media file.\n"
+      "      The media file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
       "      Use this parameter to provide the rtsp input.\n"
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
@@ -1412,21 +1467,29 @@ main (gint argc, gchar * argv[])
       "      Execute Model in SNPE DLC or ONNX or TFlite or QNN format\n"
       "      Default model format: SNPE DLC\n"
       "  model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for SNPE DLC: "
+      "      Path to the model file.\n"
+      "      Default model file for SNPE DLC: "
              DEFAULT_SNPE_CLASSIFICATION_MODEL"\n"
-      "      Default model path for TFLITE Model: "
+      "      Default model file for TFLITE Model: "
              DEFAULT_TFLITE_CLASSIFICATION_MODEL"\n"
-      "      Default model path for QNN Model: "
+      "      Default model file for QNN Model: "
              DEFAULT_QNN_CLASSIFICATION_MODEL"\n"
-      "      Default model path for ONNX Model: "
+      "      Default model file for ONNX Model: "
              DEFAULT_ONNX_CLASSIFICATION_MODEL"\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  labels: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default labels path: "DEFAULT_CLASSIFICATION_LABELS"\n"
+      "      Path to the label file.\n"
+      "      Default labels file: "DEFAULT_CLASSIFICATION_LABELS"\n"
+      "      The label file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
-      "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
+      "      Default output file path is: \n"
+      "       $HOME/Downloads/qimsdk_samples/media/"DEFAULT_OUTPUT_FILENAME"\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  video-format: Video Type format can be nv12, yuy2 or mjpeg\n"
       "      It is applicable only for USB Camera Source\n"
       "  width: USB Camera Resolution width\n"
@@ -1474,8 +1537,23 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+
+    gst_app_context_free (&appctx,
+                          &options,
+                          NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -1484,9 +1562,17 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
+  options.artifacts_dir = g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
+
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
+  }
+
+  if (options.output_file == NULL && options.sinktype == GST_VIDEO_ENCODE) {
+    options.output_file =
+        g_build_filename (options.artifacts_dir, "media",
+            DEFAULT_OUTPUT_FILENAME, NULL);
   }
 
   // Check for input source
@@ -1601,14 +1687,23 @@ main (gint argc, gchar * argv[])
   // Set model path for execution
   if (options.model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_SNPE) {
-      options.model_path = DEFAULT_SNPE_CLASSIFICATION_MODEL;
+      model_filename = DEFAULT_SNPE_CLASSIFICATION_MODEL;
     } else if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.model_path = DEFAULT_QNN_CLASSIFICATION_MODEL;
+      model_filename = DEFAULT_QNN_CLASSIFICATION_MODEL;
     } else if (options.model_type == GST_MODEL_TYPE_ONNX) {
-      options.model_path = DEFAULT_ONNX_CLASSIFICATION_MODEL;
+      model_filename = DEFAULT_ONNX_CLASSIFICATION_MODEL;
     } else {
-      options.model_path = DEFAULT_TFLITE_CLASSIFICATION_MODEL;
+      model_filename = DEFAULT_TFLITE_CLASSIFICATION_MODEL;
     }
+
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
+  }
+
+  if (options.labels_path == NULL) {
+    labels_filename = DEFAULT_CLASSIFICATION_LABELS;
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels", labels_filename, NULL);
   }
 
   if (!file_exists (options.model_path)) {
