@@ -656,7 +656,16 @@ def deploy_mode_p(artifact_path, deploy_output_dir, ssh_cfg, dry_run=False,
         # ── P3: Camera pre-run ────────────────────────────────────────────────
         if source_type == 'camera':
             print('  [P3]    Restarting cam-server (required before camera run) ...', flush=True)
-            cam_out, _, _ = ssh.run('sudo systemctl restart cam-server 2>&1', timeout=20)
+            # QLI images ship without a `sudo` binary at all and require DEVICE_USER=root
+            # (see preflight_check.py check_device_root / ssh-setup.md); prepending `sudo`
+            # unconditionally fails with "sudo: command not found" on exactly those devices,
+            # so cam-server is silently never restarted. Match the root-aware pattern used
+            # in deploy_mode_c.py / deploy_mode_d.py.
+            restart_cmd = (
+                'systemctl restart cam-server 2>&1' if ssh.user == 'root'
+                else 'sudo systemctl restart cam-server 2>&1'
+            )
+            cam_out, _, _ = ssh.run(restart_cmd, timeout=20)
             log_lines.append(f'[cam-server restart]\n{cam_out}')
             print('  [P3]    Waiting 3s for cam-server to settle ...', flush=True)
             time.sleep(3)

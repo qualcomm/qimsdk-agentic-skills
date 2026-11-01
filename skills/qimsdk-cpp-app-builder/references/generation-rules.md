@@ -28,6 +28,8 @@ Use placeholders when only runtime values are missing:
 
 Do not leave a delegate-options placeholder for standard TFLite HTP/NPU requests. Use `QNNExternalDelegate,backend_type=htp,log_level=(string)1;` unless the user provides exact delegate options.
 
+For an ONNX Runtime (`qtimlonnx`) inference stage, always honor an explicitly requested `execution-provider` / `optimization-level`. When the user asks for `execution-provider=qnn`, also set `backend-path=/usr/lib/libQnnHtp.so` (required for the QNN provider — the HTP/NPU backend library) and keep whatever `optimization-level` and optional `htp-performance-mode` the user named; note the device provider-plugin prerequisite (`libonnxruntime_providers_qnn.so`, a separate install) in the README. When the user requests neither provider nor level, generate `execution-provider=cpu` with `optimization-level=disable-all` — the portable baseline (CPU is the only provider built into the ORT core; `disable-all` preserves the `Transpose` nodes `qtimlonnx` needs for NCHW/NHWC layout detection, so higher levels can break preroll). This overrides the SDK's own `enable-extended` property default. State the chosen `cpu` + `disable-all` default in the generated `README.md` and note it is the portable baseline. See `plugin-catalog.md` "qtimlonnx - Full Property Reference" (Generation default).
+
 For confidence threshold tuning, encode `qtimlpostprocess settings` as JSON with the canonical `confidence` key, for example `"{\"confidence\": 50.0}"`. Do not use `confidence_threshold`, `confidence-threshold`, or semicolon-delimited strings.
 
 List every placeholder in `README.md`.

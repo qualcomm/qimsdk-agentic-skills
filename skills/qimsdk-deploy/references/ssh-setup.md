@@ -3,8 +3,12 @@
 For use with `qimsdk-deploy` and `qimsdk-eval` when connecting from **Windows** to remote Linux machines.
 
 Two connections may be needed depending on mode:
-- **Device** (Ubuntu or QLI) — required for Mode A, B, C
-- **Linux workstation** (Linux x86_64) — required for Mode C only
+- **Device** (Ubuntu or QLI) — required for every mode (A, B, C, D, P, M)
+- **Linux workstation** (Linux x86_64) — required for Modes C and D only
+
+Mode M is the exception to the "from Windows" framing: it cross-compiles on the Linux/WSL
+host that runs the skill, so it needs no workstation connection and no Windows host — only
+the device connection, with the extra requirements in [Step M](#step-m--mode-m-post-process-module-device-access) below.
 
 > The deploy scripts use **paramiko** (Python SSH library) — no PuTTY required at any step.
 > Follow these steps once. After that, set the key paths in `configs/.env` and run preflight.
@@ -113,7 +117,7 @@ Replace `<DEVICE_IP>`, `<DEVICE_USER>`, `<DEVICE_PASSWORD>` with your values. Pr
 
 ---
 
-## Step E — Copy public key to linux workstation (Mode C only)
+## Step E — Copy public key to linux workstation (Mode C / Mode D only)
 
 Same as Step D — use Option 1 (native OpenSSH, three separate commands) or Option 2 (paramiko snippet), substituting linux workstation credentials:
 
@@ -160,6 +164,63 @@ If you see `[WARN] password auth` — `DEVICE_KEY` path is wrong or file not fou
 
 ---
 
+## Step M — Mode M (post-process module) device access
+
+Mode M uses the **same `configs/.env` device keys** as every other mode — Steps A–D above
+apply unchanged. What differs is *where the skill runs from* and *which account it needs*.
+
+**Mode M runs on the Linux/WSL host itself.** There is no separate Linux workstation and no
+Windows-host requirement: the aarch64 cross-compile happens locally with
+`g++-aarch64-linux-gnu`, and only the install step opens an SSH connection. So Steps E and
+the WSL section below are irrelevant to Mode M — the WSL box *is* the build host, not an SSH
+target. If you are already on Linux/WSL, key setup is the ordinary
+`ssh-copy-id <DEVICE_USER>@<DEVICE_IP>` rather than the PowerShell forms in Step D.
+
+**`DEVICE_USER` must be `root`.** QLI images ship without `sudo`, so no other account can
+write the `qtimlpostprocess` module directory (`/usr/lib/imsdk/qtimlpostprocess/modules` and
+siblings) or the model/label directories. This is checked in preflight and again before the
+first byte is written — there is no `sudo` fallback to fall back to.
+
+**Two optional Mode M keys** control where the model and labels land. Both default to
+values that match how `qimsdk-model-onboarding` artifacts are wired, so leave them unset
+unless your device layout differs:
+
+```
+DEVICE_MODELS_DIR=/root/models     # optional, default /root/models
+DEVICE_LABELS_DIR=/root/labels     # optional, default /root/labels
+```
+
+**`HOST_KEY` on a device you reflash.** Mode M never reads or writes `~/.ssh/known_hosts`
+(it passes `allow_agent=False` / `look_for_keys=False` and installs its own policy), so
+reflashing the device can never produce the `REMOTE HOST IDENTIFICATION HAS CHANGED` wall of
+text and there is no stale fingerprint to clear. Setting `HOST_KEY` opts into strict
+pinning: a mismatch then aborts the connect. Leave it unset on a device you reflash often —
+the fingerprint changes every time. `DEVICE_HOST_KEY` is accepted as an alias, so an older
+Mode M config keeps working; `HOST_KEY` wins when both are set.
+
+**Password versus key, honestly.** Either works, and a key lets you drop `DEVICE_PASSWORD`
+entirely. But note what a key does *not* buy you here: reflashing the device wipes the
+installed public key, so you re-run `ssh-copy-id` every time — and the password it replaces
+is typically `oelinux123`, a published factory default, so treating it as a secret is
+theatre. Password auth is the pragmatic default for a lab device; keys make more sense for a
+device you provisioned deliberately and do not reflash.
+
+**Redaction.** Every occurrence of `DEVICE_PASSWORD` is replaced with `***` in console
+output, in `device.log`, and in `result.json`. A password in a log file is as leaked as one
+in shell history — `device.log` is the first thing anyone pastes into a bug report.
+
+Verify the whole path with:
+
+```bash
+python .claude/skills/qimsdk-deploy/references/preflight_check.py --mode M \
+    --artifact-path <path/to/imsdk-postproc-module-dir>
+```
+
+That checks the host cross-toolchain and module headers *and* the device side (root,
+`qtimlpostprocess` present, model/label dirs writable) in one run.
+
+---
+
 ## Switching back to password auth
 
 If key auth fails and you need to fall back:
@@ -169,9 +230,14 @@ If key auth fails and you need to fall back:
 
 ---
 
-## WSL (Windows Subsystem for Linux) as a Mode C Linux Workstation
+## WSL (Windows Subsystem for Linux) as a Mode C / Mode D Linux Workstation
 
-WSL Ubuntu can be used instead of a remote Linux workstation for Mode C host builds. The skill connects to WSL via SSH to `localhost` the same way it connects to a remote machine. Run these steps once before running Mode C preflight.
+WSL Ubuntu can be used instead of a remote Linux workstation for Mode C and Mode D host
+builds. The skill connects to WSL via SSH to `localhost` the same way it connects to a remote
+machine. Run these steps once before running Mode C/D preflight.
+
+> Not needed for Mode M: Mode M builds directly on the Linux/WSL host with no SSH connection
+> to it at all, so sshd, passwordless sudo and `LINUX_WORKSTATION_*` are all irrelevant there.
 
 **Prerequisite:** WSL installed with Ubuntu. If not installed, run in PowerShell as admin:
 ```powershell
@@ -238,7 +304,7 @@ After this, run preflight for Mode C — it will verify the SSH connection and r
 **What the skill handles automatically (no user action needed):**
 - `unzip` not installed → auto-installs via `sudo apt-get install -y unzip`
 - `cmake` not installed → auto-installs via `sudo apt-get install -y cmake`
-- Detects WSL is `aarch64` → downloads `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` (not the x86_64 zip)
+- Detects WSL is `aarch64` → downloads `arm-qli-2.1.1-standardsdk.zip` (not the x86_64 zip)
 
 **What the skill does NOT handle (WSL user setup — do before running preflight):**
 - WSL installation

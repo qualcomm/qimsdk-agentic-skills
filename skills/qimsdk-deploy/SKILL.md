@@ -1,6 +1,6 @@
 ---
 name: qimsdk-deploy
-description: "Deploy, build, run, and retrieve QIM SDK GStreamer C apps, gst-launch pipelines, QIM SDK C++ apps, and Python qimsdk apps on Qualcomm Linux devices. Five modes: Mode A (gst-launch — push and run directly, no build), Mode B (Ubuntu on-device build — QIMSDK source tree on device), Mode C (host build — gstreamer-app-builder C sample app, build on a Linux workstation (x86_64 or aarch64, arch auto-detected) using the host SDK, deploy to QLI device), Mode P (Python qimsdk app — push main.py and run, no build), Mode D (host build — cpp-app-builder C++ SDK app, standalone build against the Yocto SDK on a Linux workstation (x86_64 or aarch64, arch auto-detected), deploy to QLI device). Returns structured result for eval scoring."
+description: "Deploy, build, run, and retrieve QIM SDK GStreamer C apps, gst-launch pipelines, QIM SDK C++ apps, and Python qimsdk apps on Qualcomm Linux devices; also cross-compiles and installs IMSDK qtimlpostprocess post-process modules. Six modes: Mode A (gst-launch — push and run directly, no build), Mode B (Ubuntu on-device build — QIMSDK source tree on device), Mode C (host build — gstreamer-app-builder C sample app, build on a Linux workstation (x86_64 or aarch64, arch auto-detected) using the host SDK, deploy to QLI device), Mode P (Python qimsdk app — push main.py and run, no build), Mode D (host build — cpp-app-builder C++ SDK app, standalone build against the Yocto SDK on a Linux workstation (x86_64 or aarch64, arch auto-detected), deploy to QLI device), Mode M (post-process module — cross-compile an imsdk-postproc-<module>/ artifact to aarch64 with the plain g++-aarch64-linux-gnu cross-compiler, no SDK, then install it on a QLI device over SSH and verify it registers in gst-inspect-1.0 qtimlpostprocess's module= enum; triggers: 'cross-compile the postprocess module', 'build the module for aarch64', 'install the module on the device', 'is my module registered', 'gst-inspect does not list my module'). Returns structured result for eval scoring."
 ---
 
 # QIM SDK Deploy Skill
@@ -21,7 +21,7 @@ These rules override any instinct to "be helpful by trying something else." They
 
 2. **STOP on any failure.** Report the exact error message. Do not try an alternative path. The correct response to failure is: show the error, name the script/step that failed, and stop. "Let me try X instead" is NEVER the correct response.
 
-3. **ALWAYS ask for mode and artifact path before doing anything.** Do not read `.env`, do not run preflight, do not check anything until you know: (a) Mode A / B / C / P / D, (b) the artifact path. Then read `configs/.env` for only the keys that mode needs.
+3. **ALWAYS ask for mode and artifact path before doing anything.** Do not read `.env`, do not run preflight, do not check anything until you know: (a) Mode A / B / C / P / D / M, (b) the artifact path. Then read `configs/.env` for only the keys that mode needs.
 
 4. **NEVER proceed to deploy without a passing preflight for the current mode and current `.env`.** Re-read `configs/.env` from disk immediately before every preflight and every deploy — never reuse values remembered from earlier in the conversation, and never pass device credentials as command-line flags (let the script read the file, so a mid-session edit always takes effect). If preflight has not been run: run it first. If deploying a different mode than preflight was last run for: re-run preflight for the current mode.
 
@@ -49,13 +49,14 @@ All deploy scripts live in the `references/` folder next to this SKILL.md file. 
 
 ```bash
 python <skill-references-dir>/preflight_check.py \
-    --mode <A|B|C|P|D> \
+    --mode <A|B|C|P|D|M> \
     [--artifact-path <path>]
 ```
 
 Checks: Python env, PuTTY tools, credentials, TCP reachability, SSH login, device OS confirmation,
 mode-specific tool/path checks (cmake, make, sudo, timeout, source tree, output dir, cam-server),
-and for Mode C/D: workstation SSH, SDK validation, disk space.
+for Mode C/D: workstation SSH, SDK validation, disk space, and for Mode M: the local aarch64
+cross-toolchain plus the device-side module prerequisites.
 
 **Always run preflight before the first deploy and whenever the device or environment changes.**
 Credentials are read from `configs/.env` — see below.
@@ -86,9 +87,9 @@ Mode C requires on linux workstation:
 
 Note: Mode C deploy auto-provisions the workspace from scratch (SDK download+install, git clone,
 cmake configure, host-build) if not already set up. The SDK zip
-(`x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for x86_64 hosts) is downloaded from codelinaro.org if absent.
+(`x86-qli-2.1.1-standardsdk.zip` for x86_64 hosts) is downloaded from codelinaro.org if absent.
 If the download fails (network blocked), place the zip manually at
-`{LINUX_WORKSTATION_BUILD_DIR}/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` and re-run.
+`{LINUX_WORKSTATION_BUILD_DIR}/x86-qli-2.1.1-standardsdk.zip` and re-run.
 
 Mode P requires on device:
 - `python3` installed
@@ -114,6 +115,30 @@ Note: Mode D deploy auto-provisions the Yocto SDK (unzip + run the installer int
 **standalone** (out of tree) against the installed SDK's target sysroot — no shared source tree
 is cloned or mutated, unlike Mode C. Workstation arch (x86_64 or aarch64) is auto-detected,
 same as Mode C. See "Mode D — C++ Standalone Host Build" below.
+
+Mode M requires on **this** Linux/WSL host (not a workstation — the build is local):
+- `aarch64-linux-gnu-g++` / `aarch64-linux-gnu-gcc`, `cmake` ≥ 3.8.2, `make`, binutils
+  (`nm`, `objdump`, `readelf`, `file`) — one apt line, see the Mode M section
+- `qti-ml-post-process.h` resolvable (artifact `include/`, `$IMSDK_MODULES_INCLUDE_DIR`, or a
+  plugin checkout) — it is in **no** SDK sysroot
+- `--artifact-path` is **required** for Mode M preflight: the toolchain and header checks are
+  artifact-relative, so there is nothing meaningful to verify without one
+
+Mode M requires on device:
+- `DEVICE_USER` is **root** — QLI images ship without `sudo`, so no other account can write
+  the module directory. This is a hard FAIL, not a warning.
+- `qtimlpostprocess` present (`gst-inspect-1.0 qtimlpostprocess`). If the image has only the
+  older split plugin family (`qtimlvdetection`, `qtimlvclassification`, …), a
+  `qtimlpostprocess` module cannot load there at all — a different module contract, not a
+  deployment problem.
+- `DEVICE_MODELS_DIR` / `DEVICE_LABELS_DIR` creatable and writable
+- `strings`, `ldd`, `df` — WARN only. Absence degrades a diagnostic, never the install:
+  no `strings` → the module directory falls back to the default path and the result says it
+  was *assumed*; no `ldd` → the dependency check is reported unavailable; no `df` → the
+  free-space warning is skipped.
+
+Note: Mode M is the one mode with **no Windows-host requirement** — preflight skips that check
+for it, because the cross-compile runs natively on this Linux/WSL box.
 
 **Preflight failure means deploy will fail.** Every [FAIL] in preflight output must be resolved before running deploy. Do not proceed with deploy if preflight exits non-zero.
 
@@ -146,15 +171,22 @@ python <skill-references-dir>/deploy_mode_p.py \
 python <skill-references-dir>/deploy_mode_d.py \
     --artifact-path <path/to/artifact> \
     [--output-dir outputs/deploy]
+
+# Mode M (post-process module — local cross-compile, then install + verify)
+python <skill-references-dir>/deploy_mode_m.py \
+    --artifact-path <path/to/artifact> \
+    [--output-dir outputs/deploy] [--force] [--dry-run]
 ```
 
-Each script reads credentials from `configs/.env` (same as preflight).
+Each script reads credentials from `configs/.env` (same as preflight). Mode M takes the same
+`--artifact-path` / `--output-dir` flags as every other mode; its extra flags are listed in the
+[Mode M](#mode-m--post-process-module-build--install) section.
 
 ---
 
 ## Before You Start — `configs/.env`
 
-**`configs/.env` is the single source of truth for all credentials and device connection details.** It is read fresh on EVERY invocation — no values are carried between sessions or conversation turns.
+**`configs/.env` is the single source of truth for all credentials and device connection details.** It is read fresh on EVERY invocation — no values are carried between sessions or conversation turns. Every mode reads it, Mode M included.
 
 This file is gitignored and never committed. Create it once from the sample — `cp configs/.env.sample configs/.env` — then fill in your values. Both preflight and deploy scripts read it automatically.
 
@@ -265,14 +297,14 @@ When `configs/.env` does not exist, or when required keys for the selected mode 
 | `LINUX_WORKSTATION_PORT` | SSH port on the linux workstation | Standard Linux: use `22`. If you're not sure or using WSL, run on the machine: `grep -E '^Port' /etc/ssh/sshd_config 2>/dev/null \|\| echo "22"` | `22` |
 
 > SDK install and repo clone are auto-provisioned on first deploy if not already present.
-> If internet is blocked, place the SDK zip at `{LINUX_WORKSTATION_BUILD_DIR}/sdk.zip` (simplest) or use the arch-specific name: `x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` (x86_64) or `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` (aarch64/WSL on ARM). The script checks for all three.
+> If internet is blocked, place the SDK zip at `{LINUX_WORKSTATION_BUILD_DIR}/sdk.zip` (simplest) or use the arch-specific name: `x86-qli-2.1.1-standardsdk.zip` (x86_64) or `arm-qli-2.1.1-standardsdk.zip` (aarch64/WSL on ARM). The script checks for all three.
 
 All Mode C keys above are required. Preflight exits immediately with `[FAIL]` if any are missing.
 
 **Mode C — optional, bring-your-own SDK/repo:**
 | Key | What it is | Example |
 |-----|-----------|---------|
-| `LINUX_WORKSTATION_SDK_PATH` | Absolute path **on the workstation** to an SDK installer — a `.zip` (unzipped automatically to find the installer inside) or a `.sh` (already extracted, run directly). Only consulted when the SDK is not yet installed; ignored otherwise. If not set, falls back to the existing zip-lookup + codelinaro.org download. | `/local/mnt/sdk/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` or `/home/user/sdk-installer.sh` |
+| `LINUX_WORKSTATION_SDK_PATH` | Absolute path **on the workstation** to an SDK installer — a `.zip` (unzipped automatically to find the installer inside) or a `.sh` (already extracted, run directly). Only consulted when the SDK is not yet installed; ignored otherwise. If not set, falls back to the existing zip-lookup + codelinaro.org download. | `/local/mnt/sdk/x86-qli-2.1.1-standardsdk.zip` or `/home/user/sdk-installer.sh` |
 | `LINUX_WORKSTATION_IMSDK_PATH` | Absolute path **on the workstation** to an already-cloned `qimsdk` repo. When set, this path is used directly and the git clone step is skipped entirely. If the path is set but `CMakeLists.txt` is not found there, deploy fails with a clear message — it never silently falls back to cloning a fresh copy. If not set, falls back to cloning from GitHub into `{LINUX_WORKSTATION_BUILD_DIR}/qimsdk`. | `/local/mnt/repos/qimsdk` |
 
 **Ask the user during the Mode C wizard, right after `LINUX_WORKSTATION_BUILD_DIR`:**
@@ -291,8 +323,8 @@ with a different SDK (the Yocto standard SDK, not qimsdk). Optional additions:
 
 | Key | What it is | How to find it | Example |
 |-----|-----------|---------------|---------|
-| `LINUX_WORKSTATION_SDK_URL` | Source for the Yocto SDK zip (installer .sh inside) | A `file://` path to a network share, or an `http(s)://` URL | `file:///mnt/share/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` |
-| `LINUX_WORKSTATION_SDK_PATH` | Absolute path **on the workstation** to a Yocto SDK installer already present — a `.zip` (unzipped automatically to find the `.sh` installer inside) or a `.sh` (already extracted, run directly). Takes precedence over the build-dir zip lookup and `LINUX_WORKSTATION_SDK_URL`. Only consulted when the SDK is not yet installed; ignored otherwise. **Same key as Mode C** — set once, works for both modes. | `/local/mnt/sdk/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` or `/local/mnt/sdk/installer.sh` |
+| `LINUX_WORKSTATION_SDK_URL` | Source for the Yocto SDK zip (installer .sh inside) | A `file://` path to a network share, or an `http(s)://` URL | `file:///mnt/share/x86-qli-2.1.1-standardsdk.zip` |
+| `LINUX_WORKSTATION_SDK_PATH` | Absolute path **on the workstation** to a Yocto SDK installer already present — a `.zip` (unzipped automatically to find the `.sh` installer inside) or a `.sh` (already extracted, run directly). Takes precedence over the build-dir zip lookup and `LINUX_WORKSTATION_SDK_URL`. Only consulted when the SDK is not yet installed; ignored otherwise. **Same key as Mode C** — set once, works for both modes. | `/local/mnt/sdk/x86-qli-2.1.1-standardsdk.zip` or `/local/mnt/sdk/installer.sh` |
 
 > If a `qcom-yocto-sdk*.zip`, `sdk.zip`, or the arch-specific zip name (see below) is already
 > present in `LINUX_WORKSTATION_BUILD_DIR`, neither `LINUX_WORKSTATION_SDK_PATH` nor
@@ -300,17 +332,17 @@ with a different SDK (the Yocto standard SDK, not qimsdk). Optional additions:
 > `{LINUX_WORKSTATION_BUILD_DIR}/qcom-sdk` and reused for every app. SDK source precedence:
 > `LINUX_WORKSTATION_SDK_PATH` → build-dir zip → `LINUX_WORKSTATION_SDK_URL` → default Artifactory
 > zip for the detected workstation arch (via `uname -m`, same as Mode C):
-> `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip`
+> `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/x86-qli-2.1.1-standardsdk.zip`
 > (x86_64) or
-> `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip`
+> `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/arm-qli-2.1.1-standardsdk.zip`
 > (aarch64).
 
 **Ask the user during the Mode D wizard, right after `LINUX_WORKSTATION_BUILD_DIR`:**
 1. "Do you have the Yocto SDK installer already on the workstation (as a `.zip` or `.sh`)?"
    — if yes: "What is the path on the workstation?" → save as `LINUX_WORKSTATION_SDK_PATH`
    — if no: deploy will detect the workstation arch (`uname -m`) and download the matching
-     default Yocto SDK zip (`x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for x86_64 or
-     `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for aarch64) from the Artifactory URL on first
+     default Yocto SDK zip (`x86-qli-2.1.1-standardsdk.zip` for x86_64 or
+     `arm-qli-2.1.1-standardsdk.zip` for aarch64) from the Artifactory URL on first
      deploy. If you need a different source, set `LINUX_WORKSTATION_SDK_URL` to a `file://` path
      or `http(s)://` URL.
    (Mode D has no repo-clone step, so there is no `IMSDK_PATH` question — unlike Mode C.)
@@ -318,6 +350,26 @@ with a different SDK (the Yocto standard SDK, not qimsdk). Optional additions:
 **Mode P — same as Mode A (no extra keys needed):**
 
 Mode P uses the same device credentials as Mode A. No additional keys required — just `DEVICE_IP`, `DEVICE_USER`, `DEVICE_KEY`/`DEVICE_PASSWORD`, `HOST_KEY`, `DEPLOY_OUTPUT_DIR`. Never ask for `SOURCE_ROOT` or `LINUX_WORKSTATION_*` for Mode P. Artifact entry point is `main.py` (legacy `app.py` also accepted).
+
+**Mode M — same as Mode A, plus two optional keys:**
+
+Mode M uses the same device credentials as Mode A, with one hard constraint and two optional
+additions. Never ask for `SOURCE_ROOT` or `LINUX_WORKSTATION_*` for Mode M — the build is
+local, there is no workstation.
+
+| Key | What it is | How to find it | Example |
+|-----|-----------|---------------|---------|
+| `DEVICE_USER` | **Must be `root`** for Mode M — QLI images ship without `sudo`, so no other account can write the module directory | `root` on QLI 2.0 | `root` |
+| `DEVICE_MODELS_DIR` | Optional. Where the model file is pushed | Default is fine | `/root/models` |
+| `DEVICE_LABELS_DIR` | Optional. Where labels/settings are pushed | Default is fine | `/root/labels` |
+
+> `HOST_KEY` is optional for Mode M and means strict pinning when set: a mismatch aborts the
+> connect. Leave it unset on a device you reflash often — the fingerprint changes every time,
+> and Mode M never touches `~/.ssh/known_hosts`, so there is no stale entry to clear either
+> way. `DEVICE_HOST_KEY` is accepted as an alias so an older Mode M config keeps working.
+
+**During the Mode M wizard**, ask only the Mode A keys, then confirm `DEVICE_USER=root`. Do
+not ask for the models/labels dirs unless the user raises a non-default device layout.
 
 ### Full example — copy this and fill in your values
 
@@ -374,6 +426,18 @@ LINUX_WORKSTATION_SDK_URL=file:///path/to/qcom-yocto-sdk-deploy.zip
 #      file:// path (a share/mount visible on the workstation) or an
 #      http(s):// URL. Optional if a qcom-yocto-sdk*.zip is already present
 #      in LINUX_WORKSTATION_BUILD_DIR — deploy looks there first.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mode M (post-process module — local cross-compile + device install)
+# Reuses the device keys above. DEVICE_USER must be root. Both keys below are
+# optional; the defaults match how qimsdk-model-onboarding artifacts are wired.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEVICE_MODELS_DIR=/root/models
+# Why: Where deploy_mode_m.py pushes the model file.
+
+DEVICE_LABELS_DIR=/root/labels
+# Why: Where deploy_mode_m.py pushes labels.json / settings.json.
 ```
 
 ---
@@ -406,6 +470,7 @@ grouped (e.g. never phrase it as "P or D?"):
    - **C** — Host build (gstreamer-app-builder C app), device is QLI 2.0, needs a Linux workstation
    - **D** — Host build (cpp-app-builder C++ SDK app), needs a Linux workstation
    - **P** — Python qimsdk app (`main.py`/`app.py`), no build
+   - **M** — Post-process module (`imsdk-postproc-<module>/` artifact) — cross-compile to aarch64 on this Linux/WSL host, then install on a QLI device and verify registration
 2. **Artifact path:** path to the artifact folder
 
 Do not proceed until you have both. Mode determines which config keys are required. The subcommand is always deploy — preflight runs automatically before every deploy.
@@ -416,8 +481,9 @@ distinct choice, not to be merged or abbreviated when relaying to the user:**
 - **Mode A** — artifact is a `pipeline.sh` (gst-launch command). No build needed.
 - **Mode B** — artifact has `main.c` + `set(GST_EXAMPLE_BIN ...)`, device is Ubuntu with QIMSDK source tree on-device.
 - **Mode C** — artifact has `main.c` + `set(GST_EXAMPLE_BIN ...)`, device is QLI 2.0 / host build (no build tools). Needs a Linux workstation (x86_64 or aarch64 — arch is auto-detected; WSL on either Windows x86_64 or Windows ARM works).
-- **Mode D** — artifact has `main.cc` + `set(TEST_TARGET ...)` using `qti::Pipeline` / `<qti/qimsdk.h>` (cpp-app-builder). Needs a Linux workstation (x86_64 or aarch64 — arch is auto-detected; WSL on either Windows x86_64 or Windows ARM works).
+- **Mode D** — artifact has `main.cc` + `set(TEST_TARGET ...)` using `qti::Pipeline` / `<qti/qimsdk.h>` (cpp-app-builder). Needs a Linux workstation (x86_64 or aarch64 — arch is auto-detected; WSL on either Windows x86_64 or Windows ARM works) — **unless** a local `libqimsdk-app-builder.so*` + `qti/` headers are already available, in which case a direct local cross-compile skips the workstation entirely; see "Before the workstation flow — check for a local direct cross-compile first (Mode D-lite)" under "Mode D — C++ Standalone Host Build" before assuming the workstation is required.
 - **Mode P** — artifact has `main.py` (or legacy `app.py`) using `qimsdk.Pipeline`. No build.
+- **Mode M** — artifact is `imsdk-postproc-<module>/` (from `qimsdk-model-onboarding`): a `ml-postprocess-<module>.cc` + `CMakeLists.txt` for a `qtimlpostprocess` module, not a full app. Builds *on this host*, not a separate workstation — see the [Mode M](#mode-m--post-process-module-build--install) section.
 
 Mode C and Mode D both host-build on a workstation and push a binary to the device, but they target
 different builder contracts (gstreamer-app-builder's C sample apps vs cpp-app-builder's standalone
@@ -435,6 +501,7 @@ Read `configs/.env` from the repo root. Check only the keys required for the sel
 | C | All Mode A keys + `LINUX_WORKSTATION_HOST`, `LINUX_WORKSTATION_USER`, `LINUX_WORKSTATION_BUILD_DIR` |
 | P | All Mode A keys (no extra) |
 | D | All Mode A keys + `LINUX_WORKSTATION_HOST`, `LINUX_WORKSTATION_USER`, `LINUX_WORKSTATION_BUILD_DIR` (same as Mode C) + optional `LINUX_WORKSTATION_SDK_URL` |
+| M | All Mode A keys, with `DEVICE_USER=root` + optional `DEVICE_MODELS_DIR`, `DEVICE_LABELS_DIR` |
 
 - If the file does not exist: run the config wizard for the selected mode (see below)
 - If the file exists but is missing required keys for the selected mode: run the wizard for only the missing keys
@@ -444,6 +511,14 @@ Read `configs/.env` from the repo root. Check only the keys required for the sel
 
 After collecting `LINUX_WORKSTATION_BUILD_DIR`, always ask these questions before running preflight.
 **Do not skip to preflight without completing this step.**
+
+**Mode D — gate before asking the SDK question:** first check whether the Mode D-lite local
+direct cross-compile is possible (see "Before the workstation flow — check for a local direct
+cross-compile first (Mode D-lite)" under the Mode D section below) — look for a local
+`libqimsdk-app-builder.so*` and `qti/` headers, or ask the user whether they have them, before
+walking into the workstation/Yocto-SDK questions. Only ask the SDK question below once Mode
+D-lite has been ruled out (not found, and the user has none to supply) or the user explicitly
+prefers the full workstation flow.
 
 **Mode D — SDK question (ask exactly this):**
 > "Do you have the Yocto SDK installer already on the workstation — as a `.zip` or a `.sh` file?"
@@ -465,8 +540,11 @@ After collecting `LINUX_WORKSTATION_BUILD_DIR`, always ask these questions befor
 Always run preflight before deploying — it takes ~5s and verifies the device is reachable and ready:
 
 ```bash
-python <skill-references-dir>/preflight_check.py --mode <A|B|C|P|D>
+python <skill-references-dir>/preflight_check.py --mode <A|B|C|P|D|M>
 ```
+
+For Mode M, pass the artifact too — `--mode M --artifact-path <path>` — because its
+toolchain and header checks are artifact-relative and it fails without one.
 
 **If preflight fails with a connection or auth error, work through the recovery flow below before asking the user to do anything manually.** Never proceed to Step 3 until preflight exits 0.
 
@@ -583,6 +661,10 @@ even on failure. The schema and AI result card format are defined in:
 
 Read that file before rendering any deploy result. Always show the result card first.
 
+> **Mode M uses the same `result.json`** but has no run step, so it renders the separate
+> **Mode M AI Result Card** in that file. PASS requires `module_registered: true` — never
+> `playing_reached`, which Mode M reports as `"N/A (no run step)"`.
+
 ---
 
 ## Output Collection
@@ -595,6 +677,11 @@ Read that file before rendering any deploy result. Always show the result card f
 ```
 
 When called standalone, pull to `DEPLOY_OUTPUT_DIR` (from `configs/.env`) and notify user.
+
+> **Mode M** writes to the same `<DEPLOY_OUTPUT_DIR>/<artifact-name>/` folder, but there is no
+> pulled output file — the deliverable is installed on the device. Instead it leaves
+> `device.log`, `build.log`, `result.json`, the gated `libml-postprocess-<module>.so`, and a
+> `build/` cmake tree that is reused across runs.
 
 ---
 
@@ -789,7 +876,7 @@ if not set in `.env`. Set it to override or speed up detection.
 
 | State | Indicator | Action taken |
 |-------|-----------|--------------|
-| 0 — no SDK | `qcom-sdk/environment-setup-*-qcom-linux` absent | unzip `x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` → run SDK installer (or download ~3.5 GB first) |
+| 0 — no SDK | `qcom-sdk/environment-setup-*-qcom-linux` absent | unzip `x86-qli-2.1.1-standardsdk.zip` → run SDK installer (or download ~3.5 GB first) |
 | 1 — SDK installed | `qimsdk/CMakeLists.txt` absent | `git clone https://github.com/qualcomm/qimsdk.git` |
 | 2 — repo cloned | `qimsdk/gstreamer/build/Makefile` absent | build + install base libraries into SDK sysroot, then cmake configure with host SDK toolchain |
 | 3 — cmake configured | `gstreamer/build/gst-sample-apps/{binary}/{binary}` absent | push source + `cmake --build build --target {binary}` |
@@ -797,8 +884,8 @@ if not set in `.env`. Set it to override or speed up detection.
 
 **SDK zip lookup:** if `LINUX_WORKSTATION_SDK_PATH` is set, that path is used directly (a `.zip`
 is unzipped to find the installer; a `.sh` is run as-is). Otherwise:
-`{LINUX_WORKSTATION_BUILD_DIR}/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` (x86_64 hosts)
-or `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` (aarch64 hosts). Downloaded from codelinaro.org if absent.
+`{LINUX_WORKSTATION_BUILD_DIR}/x86-qli-2.1.1-standardsdk.zip` (x86_64 hosts)
+or `arm-qli-2.1.1-standardsdk.zip` (aarch64 hosts). Downloaded from codelinaro.org if absent.
 If download fails (network restricted), set `LINUX_WORKSTATION_SDK_PATH` or place the zip manually
 at that path and re-run.
 
@@ -1109,6 +1196,70 @@ the SDK's target sysroot, so there is no "build the C++ IMSDK SDK from source" s
 
 **Script:** `references/deploy_mode_d.py` (build delegated to `references/workspace_setup_d.py`)
 
+### Before the workstation flow — check for a local direct cross-compile first (Mode D-lite)
+
+The full Yocto-SDK-on-a-workstation flow below is the documented default, but it needs
+infrastructure that may not exist yet: a Linux x86_64/WSL workstation reachable over SSH, with
+passwordless sudo, and a ~5GB SDK download. Before running the Step 1a wizard or provisioning the
+SDK, check whether a **lightweight local cross-compile** is possible instead — the same bare
+cross-compiler technique Mode M uses for post-process modules, applied here to a full app.
+
+This works because a cpp-app-builder binary only needs two things at link time that a plain
+Linux/WSL host doesn't already have: the **app-builder runtime library**
+(`libqimsdk-app-builder.so*`, aarch64) and the **`qti/` header set** (`qimsdk.h` plus its
+siblings). If both are available locally, neither the Yocto SDK nor the workstation is needed.
+
+**Check, in this order, before assuming the workstation flow is required:**
+
+1. If `configs/.env` already has working `LINUX_WORKSTATION_*` keys and the user prefers that
+   path, use the documented flow below — this check is only for when that infrastructure isn't
+   set up yet.
+2. Otherwise, look for a local `libqimsdk-app-builder.so*` and a `qti/` header directory
+   (containing `qimsdk.h` plus siblings) — check the artifact directory, its parent, and any path
+   the user has already mentioned this session.
+3. **If neither is found, ask the user directly — do not silently provision the full Yocto SDK,
+   and do not silently fail either:**
+   > "To build this app I need either (a) a Linux x86_64/WSL workstation with the Yocto SDK — the
+   > full Mode D flow, or (b) a local copy of `libqimsdk-app-builder.so` (aarch64) and the `qti/`
+   > headers, which lets me cross-compile directly on this host with no workstation needed. Do you
+   > have the library and headers available somewhere, or should we set up the workstation flow
+   > instead?"
+
+   Never guess a filesystem path for the library/headers and never invent a download URL for
+   them — unlike the Yocto SDK, they are not published anywhere this skill knows of; they can only
+   come from the user.
+
+**If the user supplies the library + headers, build like this** (mirrors Mode M's technique):
+
+```bash
+# One-time per artifact: give the linker a resolvable unversioned name + matching SONAME
+mkdir -p <artifact_dir>/build-aarch64/lib
+ln -sf <path-to>/libqimsdk-app-builder.so.1.0.0 <artifact_dir>/build-aarch64/lib/libqimsdk-app-builder.so
+ln -sf <path-to>/libqimsdk-app-builder.so.1.0.0 <artifact_dir>/build-aarch64/lib/libqimsdk-app-builder.so.1
+
+aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -O2 \
+  -I <dir-containing-the-qti-headers-dir> -I <artifact_dir>/include \
+  <artifact_dir>/main.cc \
+  -L <artifact_dir>/build-aarch64/lib -lqimsdk-app-builder \
+  -Wl,--allow-shlib-undefined \
+  -Wl,-rpath,'$ORIGIN' \
+  -o <artifact_dir>/build-aarch64/<target>
+```
+
+`-Wl,--allow-shlib-undefined` is required: `libqimsdk-app-builder.so`'s own transitive
+dependencies (`libgstreamer-1.0.so.0`, `libgobject-2.0.so.0`, `libglib-2.0.so.0`,
+`libgstqtimlbase.so.1`, `libgstqtivideobase.so.1`, yaml-cpp) exist only on the real aarch64
+device, never on the build host — without this flag the linker treats their unresolved symbols
+as fatal, even though they belong to an indirect shared-library dependency, not the executable
+being linked. Verify the result before pushing it: `file <target>` must report
+`ELF 64-bit ... ARM aarch64`.
+
+Before running on-device, check whether `libqimsdk-app-builder.so.1` is already present at
+`/usr/lib/` on the device (common on QLI images) — if so, no separate library push is needed,
+the binary's `NEEDED` entry resolves via the standard loader path. If it is not present on-device,
+push it alongside the binary; the `-Wl,-rpath,'$ORIGIN'` link flag above already makes the
+binary look next to itself as a fallback.
+
 ### One-time setup — Yocto SDK install (auto-provisioned)
 
 The SDK is installed once into `{LINUX_WORKSTATION_BUILD_DIR}/qcom-sdk` and reused for every app.
@@ -1120,8 +1271,8 @@ If not already installed, deploy resolves the SDK source in this precedence orde
 3. Else `LINUX_WORKSTATION_SDK_URL`, if set (`file://` path or `http(s)://` URL).
 4. Else the workstation arch is detected (`uname -m`, same as Mode C) and the matching default
    Yocto SDK zip is downloaded:
-   - x86_64: `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip`
-   - aarch64: `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip`
+   - x86_64: `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/x86-qli-2.1.1-standardsdk.zip`
+   - aarch64: `https://artifacts.codelinaro.org/artifactory/qli-ci/flashable-binaries/meta-qcom/qcom-distro/qcom-armv8a/arm-qli-2.1.1-standardsdk.zip`
 
 Then it unzips (if needed) to find the `.sh` installer, runs it non-interactively
 (`<installer>.sh -d <sdk_dir> -y`), and verifies an `environment-setup-*-qcom-linux` script exists
@@ -1164,6 +1315,230 @@ so it is discovered by glob, not hardcoded.
 > it's missing on the device, install the C++ IMSDK runtime library there before deploying — the
 > binary will fail to start otherwise. This is a device-provisioning step, not something deploy
 > fixes automatically (Fail Fast, Don't Fix).
+
+---
+
+## Mode M — Post-Process Module (Build + Install)
+
+Use when: artifact is `imsdk-postproc-<module>/` from `qimsdk-model-onboarding` — a
+`ml-postprocess-<module>.cc` + `CMakeLists.txt` for a `qtimlpostprocess` post-process
+**module**, not a full application. This mode is structurally different from A/B/C/D/P:
+
+- It has **no separate Linux workstation** — the cross-compile runs directly on whatever
+  Linux/WSL host is running this skill. There is no "push a binary to a workstation" step,
+  and no Windows host is required (preflight skips that check for Mode M alone).
+- It has **no run/pull step** — the deliverable is a shared library installed on the device
+  and registered with the plugin, not a pipeline execution. Building a pipeline that uses
+  `module=<name>` is `qimsdk-gstreamer-app-builder`'s job, handed off after this mode.
+
+**Scripts:** `references/deploy_mode_m.py` (build delegated to `references/workspace_setup_m.py`)
+
+> ### The two things this mode exists to prevent
+>
+> `cmake --build` exiting 0 does not mean the module is deployable, and a successful `scp`
+> does not mean the device accepted it. A host-arch `.so`, a mis-named library, a mangled
+> factory symbol, or a too-new glibc reference all build cleanly and fail on the device —
+> and a copied module can sit at the right path, with the right name, and still be silently
+> ignored by the plugin. **Never report Mode M as done on the strength of an exit code alone.**
+> Done means: all four gates below passed, *and* `result.json` has `module_registered: true`.
+
+### Host prerequisites — one-time, manual
+
+Mode M verifies each of these and fails with the exact remedy rather than provisioning them:
+one needs `sudo`, and one is a source checkout. Target host: **Ubuntu 22.04 or 24.04**, native
+or WSL.
+
+**1. Build tools**
+
+```bash
+sudo apt-get install g++-aarch64-linux-gnu cmake build-essential
+```
+
+- `g++-aarch64-linux-gnu` provides `aarch64-linux-gnu-g++` and `aarch64-linux-gnu-gcc`. **No
+  Yocto SDK, no eSDK, no sysroot** — a post-process module links no IMSDK library at all.
+- `cmake` must be ≥ 3.8.2 (module `CMakeLists.txt` files declare that minimum).
+- `build-essential` provides `make`.
+
+Binutils (`nm`, `objdump`, `readelf`, `file`) come with the base system and are multi-target,
+so they read aarch64 objects without a cross-binutils package.
+
+**2. The IMSDK module headers**
+
+A post-process module compiles against exactly three headers:
+
+```
+qti-ml-post-process.h      the IModule interface -- required
+qti-labels-parser.h        LabelsParser         -- if used
+qti-json-parser.h          JsonValue            -- if used
+```
+
+They live in the **plugin source tree**, and are **not present in any SDK sysroot**. Get a
+checkout:
+
+```bash
+git clone <gst-plugins-imsdk-url> ~/gst-plugins-imsdk
+```
+
+The headers are then at `<checkout>/gst-plugin-mlpostprocess/modules/`. Some documentation
+writes this path with a `gstreamer/` prefix; a plain checkout has the plugin directories at
+its root, so both layouts are probed. Point the build at a checkout in whichever way suits you:
+
+```bash
+export IMSDK_SRC=~/gst-plugins-imsdk                     # checkout root, or
+export IMSDK_MODULES_INCLUDE_DIR=~/gst-plugins-imsdk/gst-plugin-mlpostprocess/modules
+```
+
+> **Preferred:** let `qimsdk-model-onboarding` vendor the three headers into the artifact's
+> `include/` directory. The artifact is then self-contained and reproducible, and needs no
+> checkout at build time. Record the checkout's git SHA in the artifact README so a
+> stale-header-versus-plugin-ABI mismatch stays diagnosable later.
+
+Resolution order: `--imsdk-include`, the artifact's `include/`, the artifact root,
+`$IMSDK_MODULES_INCLUDE_DIR`, then a checkout (`$IMSDK_SRC`, `~/qimsdk-src`,
+`~/gst-plugins-imsdk`, `~/gst-plugins-qimsdk`). First hit wins, and it never falls back to a
+guess — a mismatched `qti-ml-post-process.h` is an ABI mismatch that compiles cleanly and
+crashes inside `Process()`.
+
+> **If none of the above resolves all required headers, ask the user directly — do not clone a
+> checkout speculatively, and do not fall through to a stale or vendored copy from a different
+> artifact.** Search the resolution order first; only if every location comes up empty (or
+> incomplete — e.g. `qti-ml-post-process.h` found but `qti-labels-parser.h` missing while the
+> module uses `LabelsParser`), ask something like:
+> "I can't find `<missing header(s)>` in any of the usual locations (artifact `include/`,
+> `$IMSDK_MODULES_INCLUDE_DIR`, or a `gst-plugins-imsdk` checkout). Do you have a
+> `gst-plugins-imsdk` checkout somewhere I should point to, or a vendored copy of these headers
+> I can use? If not, I can clone `<gst-plugins-imsdk-url>` for you — should I do that?"
+> Never invent a header's contents or stub one out to make the build proceed — an ABI mismatch
+> here compiles clean and crashes on-device inside `Process()`, which is far harder to diagnose
+> than a build-time failure.
+
+**Two traps worth knowing**
+
+- **Sourcing an SDK shadows your tools.** If a Yocto/eSDK `environment-setup-*` script has
+  been sourced in the shell, `python3` and `cmake` on `PATH` become the SDK's own copies.
+  Open a clean shell for Mode M rather than one with an SDK env sourced. The build defends
+  itself anyway — it neutralises `CC`/`CXX`/`CFLAGS`/`CXXFLAGS`/`OECORE_*` and friends before
+  calling `cmake`, and records what it dropped in `hermetic_dropped`, because CMake seeds its
+  flags from the environment on the *first* configure only: leaking `-O2 -g -pipe` produced a
+  1.3 MB library where a clean environment produced 147 KB.
+- **The headers are not in the sysroot.** `$SDKTARGETSYSROOT/usr/include` contains no
+  `qti-ml-post-process.h`. A working cross-compiler is therefore not sufficient on its own.
+
+`workspace_setup_m.py` and the Mode M preflight are **stdlib-only**, so they run on any
+`python3` including an SDK-shadowed interpreter with no site-packages. Only the install step
+needs `paramiko`, which `requirements.txt` already provides for every other mode.
+
+### Step A — Preflight (never skip)
+
+```bash
+python <skill-references-dir>/preflight_check.py --mode M --artifact-path <artifact_dir>
+```
+
+One run covers both sides: the host cross-toolchain, `cmake`/`make`/binutils, header
+resolvability, artifact shape and module identity — then the device (root, `qtimlpostprocess`
+present, model/label dirs writable, optional `strings`/`ldd`/`df`). Prints the exact remedy
+for anything missing and exits non-zero. `--artifact-path` is required for Mode M.
+
+### Step B — Deploy (one command: build, install, verify)
+
+```bash
+python <skill-references-dir>/deploy_mode_m.py --artifact-path <artifact_dir> \
+    [--output-dir outputs/deploy] [--force] [--dry-run]
+```
+
+Build → install → verify in a single run, writing one `result.json`. Useful flags:
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Build, then stop after the read-only device checks (module dir + measured ABI). Writes nothing to the device — **use this first on an unfamiliar device.** |
+| `--force` | Replace an existing module. A timestamped backup is kept either way. |
+| `--static-cxx` | The ABI-gate remedy — relinks `-static-libstdc++ -static-libgcc`. |
+| `--max-glibc` / `--max-glibcxx` | Override the build's ABI ceiling for a known device. |
+| `--skip-abi-gate` | Last resort; recorded in `gates_skipped` and must be surfaced. |
+| `--imsdk-include <dir>` | Explicit header dir; wins over all auto-detection. |
+| `--so <path>` / `--skip-build` | Install an already-built `.so` instead of compiling. **Bypasses all four gates** — recorded as a warning and `build_passed: "N/A"`. |
+| `--model <path>` | Explicit model file, instead of the one found in the artifact. |
+| `--skip-model` / `--skip-labels` | Do not push the model / labels+settings. |
+
+Credentials never appear on the command line — they come from `configs/.env`.
+
+For a **device-free build** (no device on hand, just checking it compiles and gates clean),
+`workspace_setup_m.py` also runs standalone and needs no `configs/.env`:
+
+```bash
+python3 <skill-references-dir>/workspace_setup_m.py <artifact_dir> [--preflight-only]
+```
+
+### Step C — Report the result honestly
+
+Read `result.json` and render the **Mode M AI Result Card** in
+`references/result-format.md`. Status is PASS only when `module_registered: true` — a clean
+build and a clean copy are both real progress, but neither one is "done" on their own. Say
+plainly whenever a gate was skipped or overridden, and whenever `modules_dir_source` says the
+directory was *assumed*.
+
+### The four build gates (`workspace_setup_m.py`)
+
+Applied to the produced library, in order; any failure is a hard failure.
+
+1. **Target architecture** — `file` must report `ARM aarch64` + `shared object`. Catches an
+   ignored toolchain file (silent x86-64 build), which fails on-device with "wrong ELF class".
+2. **Library filename identity** — must be exactly `libml-postprocess-<module>.so`.
+   `qtimlpostprocess` resolves `module=<name>` to this filename by string concatenation, so a
+   differently-named library is simply never looked for. **Never rename the output to make
+   this pass** — fix `set(TARGET_NAME ...)` in the artifact instead.
+3. **Unmangled `NewModule` export** — `nm -D --defined-only` must show ` NewModule` with no
+   C++ mangling. Mangled means the factory is missing `extern "C"`; absent means no factory
+   at all.
+4. **ABI ceiling** — Ubuntu's cross-compiler links against *Ubuntu's* glibc, which can be
+   newer than the device's, producing a library that builds and installs fine and then fails
+   at `dlopen` with `version 'GLIBC_2.xx' not found`. Default ceiling is GLIBC_2.38 /
+   GLIBCXX_3.4.32 (inferred from a module known to load on QLI 2.0) — pass measured values
+   with `--max-glibc`/`--max-glibcxx` when known. Remedy for a GLIBCXX overshoot:
+   `--static-cxx`.
+
+A fifth check, `gate_needed`, is **non-fatal**: a `DT_NEEDED` entry beyond the C++ runtime
+(`libstdc++`, `libm`, `libgcc_s`, `libc`, `ld-linux-aarch64`) must also exist on the device
+and usually does not, so it is reported as a warning rather than a failure.
+
+### Device-install specifics (`deploy_mode_m.py`)
+
+- **The module directory is derived from the device, never hardcoded.** It's compiled into
+  the plugin as `GST_ML_MODULES_DIR`; a sibling plugin family (`qtimlvdetection`, …) uses a
+  *different* directory, so guessing wrong copies the file somewhere that never loads. The
+  result records whether the path was read from the plugin binary or assumed.
+- **The ABI ceiling is re-measured against the real device**, not the build's inferred
+  default, and installation stops before the first write if the library needs a symbol
+  version the device doesn't have. The measured values are reported as
+  `suggested_build_flags` — prefer them for the next build against that device.
+- **A module that already exists is never silently overwritten.** Roughly two dozen modules
+  ship in the OS image; replacing one needs `--force`, and a timestamped backup
+  (`<name>.so.bak-<UTC timestamp>`) is kept either way. The `.bak-` suffix matters: the plugin
+  resolves modules by the exact name `libml-postprocess-<n>.so`, so a backup can never be
+  picked up as a module — do not rename backups to end in `.so`. A byte-identical reinstall
+  skips the backup (reported as `unchanged`) rather than accumulating copies on a rootfs that
+  is routinely at 100%.
+- **Installs are staged and atomic** — pushed to a temp name in the *target* directory, then
+  `mv`-ed into place, so an interrupted transfer can never leave a truncated `.so` where the
+  plugin will `dlopen` it. Staging through `/tmp` would not do: it is often a separate
+  filesystem where `mv` degrades to copy-then-unlink.
+- **Root is required; there is no `sudo` fallback.** QLI images ship without `sudo`, so
+  `DEVICE_USER` must be `root` or the deploy cannot proceed at all.
+- **A model whose sha256 disagrees with `model-io.json` is a hard stop**, not a warning —
+  pushing a different model than the decode was written against is a silent correctness bug.
+- **The GStreamer registry cache is cleared and re-inspected** if the module does not appear
+  on the first `gst-inspect`, and `registry_cleared: true` records that it happened. The cache
+  is a derived artifact, so clearing it is safe — but a correct install hidden behind a stale
+  registry must not be reported as a failure.
+
+### Handoff
+
+| Need | Where |
+|---|---|
+| Generate the module source, or fix decode math | `qimsdk-model-onboarding` |
+| Rebuild the `.so` (e.g. with `--static-cxx`) | back to Step B, `deploy_mode_m.py` |
+| Build a pipeline or app that uses `module=<name>` | `qimsdk-gstreamer-app-builder` |
+| Diagnose a runtime failure from GStreamer logs | `qimsdk-debug` |
 
 ---
 
@@ -1308,7 +1683,7 @@ Fix: Do not add `add_subdirectory`. The `foreach` glob handles it — as long as
 
 
 ### Mode C (host build)
-1. **Host SDK architecture must match the linux workstation** — `x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for x86_64 hosts; `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for aarch64 hosts (e.g. WSL on ARM Windows). The skill detects host arch and picks the right zip automatically. Windows ARM with WSL2 Ubuntu (aarch64) works — the ARM SDK is available on codelinaro alongside the x86 zip.
+1. **Host SDK architecture must match the linux workstation** — `x86-qli-2.1.1-standardsdk.zip` for x86_64 hosts; `arm-qli-2.1.1-standardsdk.zip` for aarch64 hosts (e.g. WSL on ARM Windows). The skill detects host arch and picks the right zip automatically. Windows ARM with WSL2 Ubuntu (aarch64) works — the ARM SDK is available on codelinaro alongside the x86 zip.
 2. **Use local disk, not NFS home** — NFS mounts often have user quotas that cause silent write failures. Use `/local/mnt/workspace/` or similar local path.
 3. **Do NOT add `add_subdirectory()` to parent CMakeLists.txt** — the imsdk repo auto-discovers all subdirs via a `foreach` loop. Adding it explicitly causes "binary directory already used" cmake error.
 4. **Generated apps use `gst-qimsdk-` prefix** — the `qimsdk-gstreamer-dev` skill generates binaries named `gst-qimsdk-<name>`. This avoids conflicts with the imsdk repo's own apps (`gst-ai-*`). Use the binary name from `CMakeLists.txt` (`set(GST_EXAMPLE_BIN ...)`) directly — this is BOTH the cmake target name AND the output binary filename.
@@ -1327,4 +1702,11 @@ Fix: Do not add `add_subdirectory`. The `foreach` glob handles it — as long as
 14. **Re-run cmake after adding new app subdirectory** — cmake discovers subdirs at configure time, not at build time. If a new app dir is added after cmake ran, re-run cmake before building.
 
 ### Mode D (C++ standalone host build)
-1. **Yocto SDK zip must match the linux workstation arch** — `x64-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for x86_64 hosts; `arm-qli-2.0-qimsdk-2.0.0-standardsdk.zip` for aarch64 hosts (e.g. WSL on ARM Windows). The skill detects host arch (`uname -m`) and picks the right zip automatically, same as Mode C.
+1. **Yocto SDK zip must match the linux workstation arch** — `x86-qli-2.1.1-standardsdk.zip` for x86_64 hosts; `arm-qli-2.1.1-standardsdk.zip` for aarch64 hosts (e.g. WSL on ARM Windows). The skill detects host arch (`uname -m`) and picks the right zip automatically, same as Mode C.
+
+### Mode M (post-process module)
+1. **The ABI ceiling is the real cost of the distro cross-compiler.** `aarch64-linux-gnu-g++` from Ubuntu's own package repo links against *Ubuntu's* aarch64 glibc, which is routinely newer than a QLI device's. The library then builds, installs, and fails only at `dlopen` with `version 'GLIBC_2.xx' not found` — which reads like a corrupt file, not a build mismatch. `workspace_setup_m.py`'s default ceiling (GLIBC_2.38 / GLIBCXX_3.4.32) is *inferred* from a module known to load; the install step *measures* the real device numbers and reports the exact `--max-glibc`/`--max-glibcxx` flags to rebuild with — prefer those measured values for the next build against that device.
+2. **Never overwrite an existing module without `--force`.** Around two dozen modules (`yolov5`, `yolov8`, `mobilenet`, …) ship inside some QLI OS images. An artifact happening to share one of those names would silently replace part of `/usr/lib` on a plain `scp`. `deploy_mode_m.py` refuses unless `--force` is passed, and keeps a timestamped backup (`<name>.so.bak-<UTC timestamp>`) either way.
+3. **A successful copy is not a deploy.** The only thing that proves the plugin accepted the library is `module_registered: true` in `result.json` (i.e. the module appears in `gst-inspect-1.0 qtimlpostprocess`'s `module=` enum) — never report Mode M as complete on a clean `install_module` step alone.
+4. **The module directory differs by plugin family.** `qtimlpostprocess` modules live at `<libdir>/imsdk/qtimlpostprocess/modules`; `qtimlvdetection`/`qtimlvclassification`/etc. use a different directory entirely (`<libdir>/gstreamer-1.0/ml/modules`). `deploy_mode_m.py` reads the path out of the device's own plugin binary rather than assuming — trust that derivation, don't hardcode either path.
+5. **No `sudo` on QLI.** `DEVICE_USER` must be `root` in `configs/.env` — there is no privilege-escalation fallback, and the script checks `id -u` before writing anything.

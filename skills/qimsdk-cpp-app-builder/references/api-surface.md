@@ -18,6 +18,7 @@ Use this file as the API truth for generated C++ code.
 - `Pipeline& link(Names&&... names)` — variadic name list
 - Lifecycle: `prepare()`, `activate()`, `deactivate()`, `start()`, `wait()`, `stop()`, `execute()`
 - `Pipeline& eos(bool enabled)` — set/clear EOS; `bool eos() const` — query EOS flag
+- `generate_graph(const std::string& filename)` — writes a GraphViz `.dot` graph of the resolved GStreamer topology, not draw.io XML.
 - Element access:
   - Use `get(const std::string& unique_name)` when retrieving `qti::Element`.
   - Use `get<T>(...)` for typed wrappers that support raw-element construction (for example `qti::CamSrc`, `qti::AppSrc`, `qti::AppSink`).
@@ -88,9 +89,10 @@ pipeline.add_stream_filter("stage01_textfilter", TextFilter());
   - `AppSink(const std::string& name = {})`
   - `set(...)`, `set_buffer_consumer(std::function<void(qti::Buffer)> consumer)`, `set_preroll_handler(std::function<bool(qti::Buffer&&)> preroll)`, `set_eos_handler(std::function<void()> eos)`
 - `qti::Buffer`
-  - `Buffer()`, `Buffer(size_t size)`, `static Buffer from_readable_sample(void* gst_sample_opaque)`
-  - `data()`, `size()`, `resize(size_t n)`, `set_pts(uint64_t ns)`, `set_dts(uint64_t ns)`, `set_duration(uint64_t ns)`, `pts() const`, `dts() const`, `duration() const`, `is_writable() const`, `is_readonly() const`, `valid() const`
-  - `take_gst_buffer()` transfers ownership of the underlying `GstBuffer` to the caller; use only for low-level buffer ownership flows explicitly requested by the user
+  - `Buffer()`, `Buffer(size_t size)`; AppSink callbacks receive an owned wrapper around the sample's underlying `GstBuffer`
+  - `data()`, `size()`, `resize(size_t n)`, `set_pts(uint64_t ns)`, `set_dts(uint64_t ns)`, `set_duration(uint64_t ns)`, `pts() const`, `dts() const`, `duration() const`, `is_writable() const`, `is_readonly() const`, `make_writable()`, `valid() const`
+  - AppSrc consumes a buffer through its internal raw-buffer transfer; generated apps should use `AppSrc::push_buffer(...)` rather than a raw ownership helper
+  - `make_writable()` may replace the underlying storage; any pointer previously returned by `data()` must be discarded and fetched again
 - Move-only. Used with `AppSrc`/`AppSink`.
 
 `qti::AppSrc` and `qti::AppSink` do not use a generic `set_handler(...)`. Use the specific producer/consumer/preroll/EOS methods above.

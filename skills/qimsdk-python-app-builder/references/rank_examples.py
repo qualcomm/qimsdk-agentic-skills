@@ -10,8 +10,8 @@ output for the same query + index contents. It exists so a skill/agent can
 ground a natural-language request ("detect objects from a usb camera") in
 the two example corpora shipped alongside this skill:
 
-    skills/qimsdk-python-app-builder/references/pipeline-index.gst-launch.jsonl  (gst-launch/*.sh one-liners -- topology reference only, never leveraged verbatim into Python output)
-    skills/qimsdk-python-app-builder/references/pipeline-index.python-app.jsonl  (python-app/<slug>.py real qimsdk SDK Python apps -- the leverageable pool)
+    skills/prod/qimsdk-python-app-builder/references/pipeline-index.gst-launch.jsonl  (gst-launch/*.sh one-liners -- topology reference only, never leveraged verbatim into Python output)
+    skills/prod/qimsdk-python-app-builder/references/pipeline-index.python-app.jsonl  (python-app/<slug>.py real qimsdk SDK Python apps -- the leverageable pool)
 
 Each line in those files is a JSON object: {"prompt": "<nl description>",
 "path": "gst-launch/<slug>.sh"} or {"prompt": "...", "path": "python-app/<slug>.py"}.
@@ -62,7 +62,7 @@ Every hit carries two scores:
 
 INDEX CACHING
 The two .jsonl files are tokenized once and cached to
-    skills/qimsdk-python-app-builder/references/pipeline-cache/.index-cache.json
+    skills/prod/qimsdk-python-app-builder/references/pipeline-cache/.index-cache.json
 keyed on a hash of (INDEX_CACHE_VERSION, mtime of both .jsonl files). If the
 cache is missing, corrupt, or stale, it is silently rebuilt -- this script
 never crashes because of the cache. The cache write is atomic (tempfile in

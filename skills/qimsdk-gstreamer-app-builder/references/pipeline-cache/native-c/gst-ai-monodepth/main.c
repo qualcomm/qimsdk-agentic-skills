@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -49,15 +51,15 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_SNPE_MONODEPTH_MODEL "/etc/models/midasv2.dlc"
-#define DEFAULT_TFLITE_MONODEPTH_MODEL "/etc/models/midas_quantized.tflite"
-#define DEFAULT_QNN_MONODEPTH_MODEL "/etc/models/midas_quantized.bin"
-#define DEFAULT_MONODEPTH_LABELS "/etc/labels/monodepth.json"
+#define DEFAULT_SNPE_MONODEPTH_MODEL "midasv2.dlc"
+#define DEFAULT_TFLITE_MONODEPTH_MODEL "midas_quantized.tflite"
+#define DEFAULT_QNN_MONODEPTH_MODEL "midas_quantized.bin"
+#define DEFAULT_MONODEPTH_LABELS "monodepth.json"
 
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config_monodepth.json"
+#define DEFAULT_CONFIG_FILE "config_monodepth.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -96,10 +98,11 @@
  * Structure for various application specific options
  */
 typedef struct {
-  const gchar *file_path;
-  const gchar *rtsp_ip_port;
-  const gchar *model_path;
-  const gchar *labels_path;
+  gchar *artifacts_dir;
+  gchar *file_path;
+  gchar *rtsp_ip_port;
+  gchar *model_path;
+  gchar *labels_path;
   GstCameraSourceType camera_type;
   GstModelType model_type;
   gint delegate_type;
@@ -168,7 +171,8 @@ update_window_grid (GstVideoRectangle position[STREAM_COUNT])
  * @param appctx Application Context object
  */
 static void
-gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
+  gchar * config_file)
 {
   // If specific pointer is not NULL, unref it
   if (appctx->mloop != NULL) {
@@ -184,22 +188,20 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *)(&DEFAULT_SNPE_MONODEPTH_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_TFLITE_MONODEPTH_MODEL) &&
-      options->model_path != (gchar *)(&DEFAULT_QNN_MONODEPTH_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer)options->model_path);
   }
 
-  if (options->labels_path != (gchar *)(&DEFAULT_MONODEPTH_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer)options->labels_path);
   }
 
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer)options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer)config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -593,11 +595,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   g_object_set (G_OBJECT (fpsdisplaysink), "video-sink",
       waylandsink, NULL);
 
-  // Set the properties of pad_filter for negotiation with qtivcomposer.
-  // qtimlpostprocess src emits video/x-raw,format={RGBA,RGBx} (never BGRA);
-  // leave width/height unset — pinning them fails caps fixation with
-  // "Fixated width in filter caps is not supported with current
-  // post-process type!". The qtivcomposer sink-pad dimensions size the tile.
+  // Set the properties of pad_filter for negotiation with qtivcomposer
   pad_filter = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "RGBA", NULL);
 
@@ -813,12 +811,15 @@ error_clean_elements:
  * @param options Application specific options
  */
 gint
-parse_json(gchar * config_file, GstAppOptions * options)
+parse_json (gchar * config_file, GstAppOptions * options)
 {
   JsonParser *parser = NULL;
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -848,8 +849,19 @@ parse_json(gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -875,13 +887,35 @@ parse_json(gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "runtime")) {
@@ -919,12 +953,16 @@ main (gint argc, gchar * argv[])
   gchar help_description[2048];
   guint intrpt_watch_id = 0;
   GstAppOptions options = {};
+  const gchar *home_dir = NULL;
+  const gchar *model_filename = NULL;
 
   // Set default value
+  home_dir = g_getenv ("HOME");
+  options.artifacts_dir = NULL;
   options.model_path = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.labels_path = DEFAULT_MONODEPTH_LABELS;
+  options.labels_path = NULL;
   options.use_cpu = FALSE, options.use_gpu = FALSE, options.use_dsp = FALSE;
   options.use_file = FALSE, options.use_rtsp = FALSE, options.use_camera = FALSE;
   options.model_type = GST_MODEL_TYPE_SNPE;
@@ -960,7 +998,10 @@ main (gint argc, gchar * argv[])
       "\nConfig file Fields:\n"
       "  %s"
       "  file-path: \"/PATH\"\n"
-      "      File source path\n"
+      "      Path to the input media file.\n"
+      "      The media file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/media\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
       "      Use this parameter to provide the rtsp input.\n"
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
@@ -969,16 +1010,22 @@ main (gint argc, gchar * argv[])
       "      Execute Model in SNPE DLC or TFlite or QNN format\n"
       "      Default model format: SNPE DLC\n"
       "  model: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default model path for SNPE DLC: "
+      "      Path to the model file.\n"
+      "      Default model file for SNPE DLC: "
              DEFAULT_SNPE_MONODEPTH_MODEL"\n"
-      "      Default model path for TFLITE Model: "
+      "      Default model file for TFLITE Model: "
              DEFAULT_TFLITE_MONODEPTH_MODEL"\n"
-      "      Default model path for QNN Model: "
+      "      Default model file for QNN Model: "
              DEFAULT_QNN_MONODEPTH_MODEL"\n"
+      "      The model files should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/models\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  labels: \"/PATH\"\n"
-      "      This is an optional parameter and overrides default path\n"
-      "      Default labels path: "DEFAULT_MONODEPTH_LABELS"\n"
+      "      Path to the label file.\n"
+      "      Default labels file: "DEFAULT_MONODEPTH_LABELS"\n"
+      "      The label file should be placed in:\n"
+      "        $HOME/Downloads/qimsdk_samples/labels\n"
+      "      Alternatively, provide an absolute file path.\n"
       "  runtime: \"cpu\" or \"gpu\" or \"dsp\"\n"
       "      This is an optional parameter. If not filled, "
       "then default dsp runtime is selected\n",
@@ -1013,8 +1060,20 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -1022,6 +1081,9 @@ main (gint argc, gchar * argv[])
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
@@ -1124,12 +1186,21 @@ main (gint argc, gchar * argv[])
   // Set model path for execution
   if (options.model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_SNPE) {
-      options.model_path = DEFAULT_SNPE_MONODEPTH_MODEL;
+      model_filename = DEFAULT_SNPE_MONODEPTH_MODEL;
     } else if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.model_path = DEFAULT_QNN_MONODEPTH_MODEL;
+      model_filename = DEFAULT_QNN_MONODEPTH_MODEL;
     } else {
-      options.model_path = DEFAULT_TFLITE_MONODEPTH_MODEL;
+      model_filename = DEFAULT_TFLITE_MONODEPTH_MODEL;
     }
+
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
+  }
+
+  if (options.labels_path == NULL) {
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_MONODEPTH_LABELS, NULL);
   }
 
   if (!file_exists (options.model_path)) {

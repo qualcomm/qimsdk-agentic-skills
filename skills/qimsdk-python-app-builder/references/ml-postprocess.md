@@ -118,7 +118,55 @@ mlbin.set_postprocess_handler(callback)
 
 ## `mlframe`/`mlparams` Runtime Objects
 
-Every custom postprocess callback receives `mlframe` and `mlparams` as opaque SDK runtime objects, not plain Python types. Use only documented accessors and model-specific keys provided by references or the user.
+Every custom postprocess callback receives `mlframe` and `mlparams` as GObject-introspected SDK runtime objects (`GstMLFrame`/`GstMLParam` from `GstQtiML-1.0`), not plain Python types. Use only the documented accessors below and model-specific keys provided by references or the user — do not invent additional members.
+
+### Reading raw tensor data from `mlframe`
+
+`mlframe.get_tensor(index)` is the documented way to read a model output tensor as a NumPy array. It wraps `gst_ml_frame_get_tensor()` and hands back an array already mapped, shaped, and dtyped per the tensor's real dimensions and `GstMLType` — every bundled reference app (`classification_resnet101`, `detection_yolov5`, `detection_yolov8`, `pose_estimation_hrnet`, `pose_estimation_posenet`, `depth_estimation_midasv2`, `segmentation_deeplab`, `gesture_recognition`, `mlbin_yolov8`) reads its tensors this way, with no manual pointer/size handling:
+
+```python
+tensor = mlframe.get_tensor(batch_idx)                              # single-tensor output
+tensor = mlframe.get_tensor(n_tensors * batch_idx + tensor_idx)      # multi-tensor output
+```
+
+This is a real callback-argument method, not something to leave as a `# TODO: read tensor buffer` placeholder — a generated callback that needs raw tensor bytes must call it directly.
+
+Other real `mlframe` accessors seen throughout the bundled reference apps:
+
+- `mlframe.info.n_tensors` — number of tensors in the frame (`GstMLInfo.n_tensors`). Validate this against the model's expected tensor count before indexing, for example `if mlframe.info.n_tensors != EXPECTED_TENSORS: raise KeyError(...)`.
+- `mlframe.info.type` — tensor type info, used for logging (`f"tensors={mlframe.info.type}"`).
+- `mlframe.buffer` — the underlying `GstBuffer`, needed only to look up per-tensor quantization metadata (below). Do not map/unmap it directly; `get_tensor()` already handles mapping.
+
+Multi-tensor, multi-batch outputs are indexed as `n_tensors * batch_idx + tensor_idx`, matching the per-tensor memory index (`GstMLTensorMeta.id`) inside the buffer.
+
+### Quantization metadata (`GstMLTensorMeta`)
+
+`GstQtiML.buffer_get_ml_tensor_meta_id(mlframe.buffer, index)` returns a `GstMLTensorMeta` (or `None` if the buffer carries no such metadata) with these real fields, from `GstQtiML-1.0.gir` / `gstmlmeta.h`:
+
+| Field | Meaning |
+|---|---|
+| `id` | memory index inside the `GstBuffer` this meta describes |
+| `name` | tensor name (`GQuark`) |
+| `type` | `GstMLType` enum (`int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`float16`/`float32`) |
+| `n_dimensions`, `dimensions` | tensor shape, mirroring `mlframe.info` |
+| `qscale` | dequantization scale (`gfloat`) |
+| `qoffset` | dequantization offset (`gfloat`) |
+
+Dequantize only when `get_tensor()` returns an integer dtype — the common TFLite/QNN flow already delivers dequantized `float32`:
+
+```python
+def dequantize_if_int(arr: np.ndarray, mlframe, index: int) -> np.ndarray:
+    if arr.dtype in (np.int8, np.uint8, np.int16, np.uint16, np.int32):
+        meta = GstQtiML.buffer_get_ml_tensor_meta_id(mlframe.buffer, index)
+        qscale = meta.qscale if meta is not None and hasattr(meta, "qscale") else 1.0
+        qoffset = meta.qoffset if meta is not None and hasattr(meta, "qoffset") else 0.0
+        return (arr.astype(np.float32) - float(qoffset)) * float(qscale)
+    return arr.astype(np.float32)
+```
+
+Never hardcode a `qscale`/`qoffset` constant; always read it from the buffer's own metadata for that tensor index — it is per-export.
+
+### `mlparams.get_*()`
 
 `mlparams.get_*()` accessors return `(ok, value)`. Always check `ok` before using `value`:
 
@@ -129,13 +177,15 @@ if not (ok_w and ok_h):
     raise KeyError("Missing input tensor width/height in mlparams")
 ```
 
+### Writing `Tensors`-kind output
+
 For `Tensors`-kind callbacks, write output through the typed `tensors` argument, not through `mlframe`. When the output tensor is writable and shaped like the decoded array, use `numpy.copyto(...)`:
 
 ```python
 np.copyto(tensors.get_tensor(0), landmarks_2d)
 ```
 
-Do not invent additional `mlframe` / `mlparams` members, tensor metadata keys, tensor shapes, or decode math beyond the user's model contract or this skill's references.
+Do not invent `mlframe` / `mlparams` members, tensor metadata keys, or accessors beyond `get_tensor()`, `info.n_tensors`, `info.type`, `buffer`, and `buffer_get_ml_tensor_meta_id()` above. Tensor shapes, box/keypoint/mask layout, and other decode math still must come from the user's model contract or this skill's references — reading the tensor is documented, decoding its contents is model-specific.
 
 ## Supported Callback Kinds
 
@@ -163,7 +213,7 @@ Reference apps use the public marker annotation for dispatch, but construct conc
 | `AudioClassifications` | no documented Python SDK field mapping in this skill; keep as a TODO placeholder unless a future source refresh documents the concrete audio classification fields |
 | `Tensors` | do not create a `GstQtiML.*` object; write into output tensors returned by `tensors.get_tensor(index)` |
 
-Functional callbacks often use `GstQtiML.buffer_get_ml_tensor_meta_id(mlframe.buffer, index)` to read tensor quantization metadata. Do not invent tensor indexing, tensor shapes, qscale/qoffset math, NMS, keypoint layout, mask layout, label mapping, or tensor-output copy logic when the user did not provide those details.
+Functional callbacks use `mlframe.get_tensor(index)` to read tensors and `GstQtiML.buffer_get_ml_tensor_meta_id(mlframe.buffer, index)` to read tensor quantization metadata — both documented above. Do not invent tensor indexing beyond the documented `n_tensors * batch_idx + tensor_idx` formula, tensor shapes, NMS, keypoint layout, mask layout, label mapping, or tensor-output copy logic when the user did not provide those details.
 
 All successful custom postprocess callbacks return `True`. Use `False` only for a deliberate validation/error branch. Do not return the typed output container object.
 
@@ -174,7 +224,7 @@ Object detection:
 ```python
 def detection_callback(mlframe, mlparams, detections: ObjectDetections):
     """Placeholder for custom object detection postprocessing."""
-    # TODO: read model tensors from mlframe/mlparams.
+    # TODO: read tensors with mlframe.get_tensor(index); dequantize if int (see Quantization metadata above).
     # TODO: decode boxes, class ids, and scores for the selected model.
     # TODO: apply confidence thresholding and NMS.
     # TODO: append GstQtiML.Detection() objects to detections.
@@ -188,6 +238,7 @@ Pose:
 ```python
 def pose_callback(mlframe, mlparams, poses: Poses):
     """Placeholder for custom pose postprocessing."""
+    # TODO: read tensors with mlframe.get_tensor(index); dequantize if int (see Quantization metadata above).
     # TODO: decode keypoints using the selected model's output layout.
     # TODO: scale keypoints back to frame or ROI coordinates.
     # TODO: append GstQtiML.Pose() objects with Keypoint/KeypointLink entries to poses.
@@ -201,6 +252,7 @@ Segmentation:
 ```python
 def segmentation_callback(mlframe, mlparams, segmentations: Segmentations):
     """Placeholder for custom segmentation postprocessing."""
+    # TODO: read tensors with mlframe.get_tensor(index); dequantize if int (see Quantization metadata above).
     # TODO: decode mask tensors and class ids for the selected model.
     # TODO: apply resizing/color mapping if required by the output target.
     # TODO: append GstQtiML.Segmentation() objects to segmentations.
@@ -214,6 +266,7 @@ Depth estimation:
 ```python
 def depthmap_callback(mlframe, mlparams, depthmaps: DepthMaps):
     """Placeholder for custom depth-map postprocessing."""
+    # TODO: read tensors with mlframe.get_tensor(index); dequantize if int (see Quantization metadata above).
     # TODO: decode depth tensor values and color mapping for the selected model.
     # TODO: append GstQtiML.DepthMap() objects to depthmaps.
     # Empty metadata is valid for a placeholder; return True so downstream flow continues.
@@ -226,6 +279,7 @@ Image classification:
 ```python
 def classification_callback(mlframe, mlparams, classifications: ImageClassifications):
     """Placeholder for custom image classification postprocessing."""
+    # TODO: read tensors with mlframe.get_tensor(index); dequantize if int (see Quantization metadata above).
     # TODO: decode logits/probabilities, top-k, labels, confidence, and colors.
     # TODO: append GstQtiML.Classification() objects to classifications.
     # Empty metadata is valid for a placeholder; return True so downstream flow continues.
@@ -238,7 +292,7 @@ Tensor pass-through:
 ```python
 def tensor_callback(mlframe, mlparams, tensors: Tensors):
     """Placeholder for tensor inspection or dump logic."""
-    # TODO: inspect tensor names, shapes, and buffers.
+    # TODO: inspect tensors with mlframe.get_tensor(index) / mlframe.info.n_tensors (see Reading raw tensor data above).
     # TODO: write output data into tensors.get_tensor(index) only if the app requires it.
     # Empty/no-op output is valid for a placeholder; return True so downstream flow continues.
     # Use False only for real validation/error branches.

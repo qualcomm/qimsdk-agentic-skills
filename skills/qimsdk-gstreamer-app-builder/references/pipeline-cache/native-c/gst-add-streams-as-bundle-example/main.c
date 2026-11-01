@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
 * Application:
@@ -23,6 +25,8 @@
 #include <glib-unix.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <errno.h>
+#include <glib/gstdio.h>
 
 #include <gst/gst.h>
 
@@ -38,11 +42,42 @@
   "\nOutput:\n" \
   "  Upon executing the application, with Display option user will observe " \
   "content displayed on the screen, \n" \
-  "with File option encoded stream will be stored at /etc/media/video_%d.mp4" \
-
-#define DEFAULT_OUTPUT_PATH "/etc/media"
+  "with File option encoded stream will be stored at " \
+  "$HOME/Downloads/qimsdk_samples/media/video_%d.mp4"
 
 #define STREAM_COUNT 3
+
+static gchar *
+create_qimsdk_default_media_dir (void)
+{
+  const gchar *home = g_getenv ("HOME");
+  gchar *media_dir = NULL;
+
+  if (home == NULL || *home == '\0') {
+    home = g_get_home_dir ();
+  }
+  if (home == NULL || *home == '\0') {
+    g_printerr ("ERROR: HOME is not set and no home directory is available.\n");
+    return NULL;
+  }
+
+  media_dir = g_build_filename (home, "Downloads", "qimsdk_samples",
+      "media", NULL);
+  if (media_dir == NULL) {
+    g_printerr ("ERROR: Failed to allocate the default media path.\n");
+    return NULL;
+  }
+
+  if (g_mkdir_with_parents (media_dir, 0755) != 0) {
+    g_printerr ("ERROR: Failed to create media directory '%s': %s\n",
+        media_dir, g_strerror (errno));
+    g_free (media_dir);
+    return NULL;
+  }
+
+  return media_dir;
+}
+
 typedef struct _GstStreamInf GstStreamInf;
 
 // Contains information for used plugins in the stream
@@ -238,6 +273,7 @@ static GstStreamInf *
 create_stream_encode (GstCameraAppContext *appctx, gint x, gint y, gint w, gint h)
 {
   gchar *padname = NULL;
+  gchar *output_file = NULL;
   GstCaps *qmmf_caps;
   gchar temp_str[100];
   gboolean ret = FALSE;
@@ -297,9 +333,15 @@ create_stream_encode (GstCameraAppContext *appctx, gint x, gint y, gint w, gint 
   g_object_set (G_OBJECT (stream->mp4mux), "reserved-max-duration", 1000000000,
       NULL);
 
-  snprintf (temp_str, sizeof (temp_str), "%s/video_%d.mp4",
-      appctx->output_path, appctx->stream_cnt);
-  g_object_set (G_OBJECT (stream->filesink), "location", temp_str, NULL);
+  snprintf (temp_str, sizeof (temp_str), "video_%d.mp4", appctx->stream_cnt);
+  output_file = g_build_filename (appctx->output_path, temp_str, NULL);
+  if (output_file == NULL) {
+    g_printerr ("ERROR: Failed to allocate output file path.\n");
+    goto cleanup;
+  }
+  g_object_set (G_OBJECT (stream->filesink), "location", output_file, NULL);
+  g_free (output_file);
+  output_file = NULL;
 
   // Add the elements to the pipeline
   gst_bin_add_many (GST_BIN (appctx->pipeline), stream->capsfilter,
@@ -360,6 +402,7 @@ create_stream_encode (GstCameraAppContext *appctx, gint x, gint y, gint w, gint 
   return stream;
 
 cleanup:
+  g_free (output_file);
   // Set NULL state to the unlinked elemets
   gst_element_set_state (stream->capsfilter, GST_STATE_NULL);
   gst_element_set_state (stream->encoder, GST_STATE_NULL);
@@ -460,11 +503,7 @@ release_all_streams (GstCameraAppContext *appctx)
     count++;
   }
 
-  if (appctx->output_path != (gchar *)(
-      &DEFAULT_OUTPUT_PATH) &&
-      appctx->output_path != NULL) {
-    g_free ((gpointer)appctx->output_path);
-  }
+  g_clear_pointer (&appctx->output_path, g_free);
 }
 
 /*
@@ -708,10 +747,12 @@ main (gint argc, gchar * argv[])
           GST_STR_NULL (error->message));
       g_clear_error (&error);
       g_free (output);
+      g_clear_pointer (&appctx.output_path, g_free);
       return -1;
     } else if (!success && (NULL == error)) {
       g_printerr ("ERROR: Initializing: Unknown error!\n");
       g_free (output);
+      g_clear_pointer (&appctx.output_path, g_free);
       return -1;
     }
   } else {
@@ -729,9 +770,12 @@ main (gint argc, gchar * argv[])
   }
   g_free (output);
 
-  // By default output files are stored in /etc/media
-  if (NULL == appctx.output_path) {
-    appctx.output_path = DEFAULT_OUTPUT_PATH;
+  // By default output files are stored under $HOME/Downloads/qimsdk_samples/media.
+  if (appctx.output_path == NULL) {
+    appctx.output_path = create_qimsdk_default_media_dir ();
+    if (appctx.output_path == NULL) {
+      return -1;
+    }
   }
 
   // Initialize GST library.
@@ -740,6 +784,7 @@ main (gint argc, gchar * argv[])
   pipeline = gst_pipeline_new ("gst-add-streams-as-bundle-example");
   if (!pipeline) {
     g_printerr ("\n failed to create pipeline.\n");
+    g_clear_pointer (&appctx.output_path, g_free);
     return -1;
   }
   appctx.pipeline = pipeline;
@@ -755,6 +800,7 @@ main (gint argc, gchar * argv[])
     gst_bin_remove (GST_BIN (pipeline), qtiqmmfsrc);
     gst_object_unref (pipeline);
     g_printerr ("ERROR: Failed to create Main loop!\n");
+    g_clear_pointer (&appctx.output_path, g_free);
     return -1;
   }
   appctx.mloop = mloop;
@@ -765,6 +811,7 @@ main (gint argc, gchar * argv[])
     gst_object_unref (pipeline);
     g_main_loop_unref (mloop);
     g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
+    g_clear_pointer (&appctx.output_path, g_free);
     return -1;
   }
 

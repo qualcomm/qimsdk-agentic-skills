@@ -1,6 +1,6 @@
 ---
 id: qimsdk.cpp.app_builder
-version: 1.0
+version: 1.1
 status: draft
 tech_area: [qimsdk, cpp, application_generation]
 skill_category: app_generation

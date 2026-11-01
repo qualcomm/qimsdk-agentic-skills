@@ -1,6 +1,6 @@
 {
   "name": "qimsdk-agentic-skills",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "QIM SDK agentic skills for GStreamer, C++, and Python app generation plus on-device deployment on Qualcomm Linux platforms.",
   "author": {
     "name": "Qualcomm"

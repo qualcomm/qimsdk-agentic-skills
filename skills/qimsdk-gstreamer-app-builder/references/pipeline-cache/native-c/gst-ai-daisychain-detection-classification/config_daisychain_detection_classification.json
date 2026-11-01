@@ -1,10 +1,10 @@
 {
-  "input-file": "/etc/media/video.mp4",
+  "input-file": "video.mp4",
   "detection-runtime": "dsp",
   "classification-runtime": "dsp",
   "output-type":"waylandsink",
-  "detection-model": "/etc/models/yolox_quantized.tflite",
-  "detection-labels": "/etc/labels/yolox.json",
-  "classification-model": "/etc/models/inception_v3_quantized.tflite",
-  "classification-labels": "/etc/labels/classification.json"
+  "detection-model": "yolox_quantized.tflite",
+  "detection-labels": "yolox.json",
+  "classification-model": "inception_v3_quantized.tflite",
+  "classification-labels": "classification.json"
 }

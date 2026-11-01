@@ -2319,7 +2319,7 @@ Replace `<NAME>` with the generated CMake project name and `<binary-name>` with 
 
 ## When to Use
 
-QIMSDK sample apps use JSON config files at `/etc/configs/config_<name>.json` to configure paths, runtime, and source type at runtime without recompiling.
+QIMSDK sample apps resolve JSON config files in this order: `$XDG_CONFIG_HOME/qimsdk_samples/config_<name>.json`, then `$HOME/.config/qimsdk_samples/config_<name>.json`, then `/etc/configs/config_<name>.json` as a last-resort fallback. This lets deployments override the system config without changing the app.
 
 For generated apps, the default is **hardcoded paths** (simpler, no extra dependency). Use this JSON pattern only when the user asks for a configurable app or mentions a config file.
 
@@ -2397,7 +2397,7 @@ parse_config (const gchar *config_file, gchar **file_path,
 
 ## Default Config File Path
 
-QIMSDK apps default to `/etc/configs/config_<name>.json` on device.
+QIMSDK apps search for `config_<name>.json` under `$XDG_CONFIG_HOME/qimsdk_samples/`, then `$HOME/.config/qimsdk_samples/`, and finally `/etc/configs/` as the last fallback on device.
 
 In main():
 ```c

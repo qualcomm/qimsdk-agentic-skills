@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
  * Application:
@@ -46,14 +48,18 @@
  */
 
 #include <glib-unix.h>
+#include <glib/gstdio.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 
 #include <gst/gst.h>
 
 #include <gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_FILE  "/etc/media/video_transform.mp4"
+#define DEFAULT_OP_MP4_FILENAME \
+  (g_build_filename (g_get_home_dir (), "Downloads", "qimsdk_samples", \
+      "media", "video_transform.mp4", NULL))
 
 #define DEFAULT_INPUT_WIDTH  1920
 #define DEFAULT_INPUT_HEIGHT 1080
@@ -76,18 +82,18 @@
   "\nCommand:\n"                                                                     \
   "All three operations with camera source\n"                                        \
   "  gst-transform-example -r 90 -f 2 --input_width 3840 --input_height 2160 "       \
-  "--output_width 1920 --output_height 1080 -o /etc/media/video_transform.mp4 \n"          \
+  "--output_width 1920 --output_height 1080 -o $HOME/Downloads/qimsdk_samples/media/video_transform.mp4 \n"          \
   "All three operations with filesource       \n"                                    \
   "  gst-transform-example -r 90 -f 2 --output_width 1920 --output_height 1080 "     \
-  " -o /etc/media/video_transform.mp4 -i /etc/media/video_avc.mp4  \n"                               \
+  " -o $HOME/Downloads/qimsdk_samples/media/video_transform.mp4 -i $HOME/Downloads/qimsdk_samples/media/video_avc.mp4  \n"                               \
   "Execute rotations with camera source \n"                                          \
-  "  gst-transform-example -r 270 -o /etc/media/video_transform.mp4 \n"                    \
+  "  gst-transform-example -r 270 -o $HOME/Downloads/qimsdk_samples/media/video_transform.mp4 \n"                    \
   "Execute rotations with file source \n"                                            \
-  "  gst-transform-example -r 270 -o /etc/media/video_transform.mp4 -i /etc/media/video_avc.mp4 \n" \
+  "  gst-transform-example -r 270 -o $HOME/Downloads/qimsdk_samples/media/video_transform.mp4 -i $HOME/Downloads/qimsdk_samples/media/video_avc.mp4 \n" \
   "\nOutput:\n"                                                                      \
   "  Upon execution, the application presents the output for preview on the "        \
   "display. Once the use case concludes, the recorded output file is saved "         \
-  "at the specified path.(/etc/media/)"
+  "at the specified path.($HOME/Downloads/qimsdk_samples/media/)"
 
 // Structure to hold the application context
 struct _GstTransformAppContext
@@ -129,7 +135,7 @@ gst_app_context_new ()
   ctx->pipeline = NULL;
   ctx->mloop = NULL;
   ctx->input_file = NULL;
-  ctx->output_file = DEFAULT_OUTPUT_FILE;
+  ctx->output_file = NULL;
   ctx->rotate = DEFAULT_ROTATION;
   ctx->input_width = DEFAULT_INPUT_WIDTH;
   ctx->input_height = DEFAULT_INPUT_HEIGHT;
@@ -148,26 +154,20 @@ gst_app_context_new ()
 static void
 gst_app_context_free (GstTransformAppContext * appctx)
 {
+  if (appctx == NULL)
+    return;
+
   if (appctx->mloop != NULL) {
     g_main_loop_unref (appctx->mloop);
     appctx->mloop = NULL;
   }
-
   if (appctx->pipeline != NULL) {
     gst_object_unref (appctx->pipeline);
     appctx->pipeline = NULL;
   }
-
-  if (appctx->input_file != NULL)
-    g_free ((gpointer)appctx->input_file);
-
-  if (appctx->output_file != NULL &&
-    appctx->output_file != (gchar *)(&DEFAULT_OUTPUT_FILE))
-    g_free ((gpointer)appctx->output_file);
-
-
-  if (appctx != NULL)
-    g_free ((gpointer)appctx);
+  g_clear_pointer (&appctx->input_file, g_free);
+  g_clear_pointer (&appctx->output_file, g_free);
+  g_free (appctx);
 }
 
 /**
@@ -458,11 +458,13 @@ main (gint argc, gchar ** argv)
 
   GOptionEntry camera_entries[2] = {};
 
+  // Initialize GST library.
+  gst_init (&argc, &argv);
+
   GstElementFactory *libcamera_factory = gst_element_factory_find ("libcamerasrc");
   gboolean camera_is_available = is_camera_available () || (libcamera_factory != NULL);
   if (libcamera_factory)
       gst_object_unref (libcamera_factory);
-
   if (camera_is_available) {
     GOptionEntry temp_camera_entries[] = {
       {"input_width", 'W', 0, G_OPTION_ARG_INT, &app_ctx->input_width, "Width",
@@ -494,9 +496,10 @@ main (gint argc, gchar ** argv)
       "image scale output height default 1080"},
   {"input_file", 'i', 0, G_OPTION_ARG_FILENAME, &app_ctx->input_file,
       "Input Filename - i/p mp4 file path and name",
-      "e.g. -i /etc/media/<file_name>.mp4"},
+      "e.g. -i $HOME/Downloads/qimsdk_samples/media/<file_name>.mp4"},
   {"output_file", 'o', 0, G_OPTION_ARG_STRING, &app_ctx->output_file,
-      "Output Filename", "default - /etc/media/video_AVC_transform.mp4"},
+      "Output Filename",
+      "default - $HOME/Downloads/qimsdk_samples/media/video_transform.mp4"},
   camera_entries[0],
   camera_entries[1],
   { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
@@ -530,6 +533,21 @@ main (gint argc, gchar ** argv)
     return ret;
   }
 
+  if (app_ctx->output_file == NULL) {
+    if (!create_default_media_dir ()) {
+      g_printerr ("\nUnable to create default media directory. Exiting.\n");
+      gst_app_context_free (app_ctx);
+      return ret;
+    }
+
+    app_ctx->output_file = DEFAULT_OP_MP4_FILENAME;
+    if (app_ctx->output_file == NULL) {
+      g_printerr ("\nUnable to build MP4 output file path. Exiting.\n");
+      gst_app_context_free (app_ctx);
+      return ret;
+    }
+  }
+
   // Check for input source
   if (camera_is_available) {
     g_print ("TARGET Can support file and camera source\n");
@@ -541,9 +559,6 @@ main (gint argc, gchar ** argv)
       return ret;
     }
   }
-
-  // Initialize GST library.
-  gst_init (&argc, &argv);
 
   // Create the pipeline
   app_ctx->pipeline = gst_pipeline_new ("gst-transform-example");

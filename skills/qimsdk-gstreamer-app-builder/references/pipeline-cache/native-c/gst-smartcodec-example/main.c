@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
  * Gstreamer Application:
@@ -27,8 +29,14 @@
 
 #include <gst/gst.h>
 #include <gst_sample_apps_utils.h>
+#include <errno.h>
 
-#define DEFAULT_OUTPUT_FILENAME "/etc/media/vid_smartcodec_out.mp4"
+#define DEFAULT_MEDIA_DIR \
+  (g_build_filename (g_get_home_dir (), "Downloads", "qimsdk_samples", \
+      "media", NULL))
+#define DEFAULT_OUTPUT_FILENAME \
+  (g_build_filename (g_get_home_dir (), "Downloads", "qimsdk_samples", \
+      "media", "vid_smartcodec_out.mp4", NULL))
 #define DEFAULT_WIDTH           1280
 #define DEFAULT_HEIGHT          720
 #define NOISE_REDUCTION_HIGH_QUALITY 2
@@ -40,7 +48,7 @@
   "bandwidth/storage from camera input and also from filesource"               \
   " using Qualcomm Streamer plugins"                                           \
   "\nCommand For camera source :\n"                                            \
-  "gst-smartcodec-example -w 1920 -h 1080 -o /etc/media/vid_smartcodec_out.mp4 \n"                     \
+  "gst-smartcodec-example -w 1920 -h 1080 -o $HOME/Downloads/qimsdk_samples/media/vid_smartcodec_out.mp4 \n"                     \
   "\nOutput :\n"                                                               \
   " Upon execution,application will generates output as encoded mp4 file"      \
 
@@ -55,6 +63,32 @@ struct _GstSmartCodecContext
 };
 
 typedef struct _GstSmartCodecContext GstSmartCodecContext;
+
+/**
+ * Create the default QIMSDK sample media directory.
+ *
+ * @return TRUE on success, FALSE on failure.
+ */
+static gboolean
+create_qimsdk_smartcodec_media_dir ()
+{
+  gchar *media_dir = DEFAULT_MEDIA_DIR;
+
+  if (media_dir == NULL) {
+    g_printerr ("Failed to build default media directory path\n");
+    return FALSE;
+  }
+
+  if (g_mkdir_with_parents (media_dir, 0755) != 0) {
+    g_printerr ("Failed to create default media directory '%s': %s\n",
+        media_dir, g_strerror (errno));
+    g_free (media_dir);
+    return FALSE;
+  }
+
+  g_free (media_dir);
+  return TRUE;
+}
 
 /**
  * Create and initialize application context:
@@ -308,7 +342,7 @@ main (gint argc, gchar * argv[])
       "image height"},
   {"output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
     "Output Filename",
-    "-o /etc/media/vid_smartcodec_out.mp4"},
+    "-o $HOME/Downloads/qimsdk_samples/media/vid_smartcodec_out.mp4"},
   { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
@@ -345,9 +379,20 @@ main (gint argc, gchar * argv[])
     g_print ("TARGET Can support camera source only \n");
   }
 
-  // set the Output Filename
-  if (appctx->output_file == NULL)
-    appctx->output_file = g_strdup (DEFAULT_OUTPUT_FILENAME);
+  // Set the default output filename when no command-line override is provided.
+  if (appctx->output_file == NULL) {
+    if (!create_qimsdk_smartcodec_media_dir ()) {
+      gst_app_context_free (appctx);
+      return -1;
+    }
+
+    appctx->output_file = DEFAULT_OUTPUT_FILENAME;
+    if (appctx->output_file == NULL) {
+      g_printerr ("Failed to build default output filename\n");
+      gst_app_context_free (appctx);
+      return -1;
+    }
+  }
 
   // Initialize GST library.
   gst_init (&argc, &argv);

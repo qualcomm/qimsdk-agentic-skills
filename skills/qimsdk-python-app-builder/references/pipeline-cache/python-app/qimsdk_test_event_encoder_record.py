@@ -127,7 +127,7 @@ class EventRecordState:
         if not self.recording:
             return True
         try:
-            gst_buf = buffer.take_gst_buffer()
+            gst_buf = buffer.get_raw_buffer()
             if gst_buf is not None:
                 self.record_src.push_buffer(Buffer(gst_buffer=gst_buf.copy()))
         except Exception:

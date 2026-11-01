@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /**
  * Application:
@@ -50,9 +52,9 @@
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_QNN_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.bin"
-#define DEFAULT_TFLITE_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.tflite"
-#define DEFAULT_FACE_DETECTION_LABELS "/etc/labels/face_detection.json"
+#define DEFAULT_QNN_FACE_DETECTION_MODEL "face_det_lite_quantized.bin"
+#define DEFAULT_TFLITE_FACE_DETECTION_MODEL "face_det_lite_quantized.tflite"
+#define DEFAULT_FACE_DETECTION_LABELS "face_detection.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -67,7 +69,7 @@
 /**
  * Default path of config file
  */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config_face_detection.json"
+#define DEFAULT_CONFIG_FILE "config_face_detection.json"
 
 /**
  * Default value of Threshold
@@ -120,10 +122,11 @@ typedef enum
  */
 typedef struct
 {
-  const gchar *file_path;
-  const gchar *rtsp_ip_port;
-  const gchar *model_path;
-  const gchar *labels_path;
+  gchar *artifacts_dir;
+  gchar *file_path;
+  gchar *rtsp_ip_port;
+  gchar *model_path;
+  gchar *labels_path;
   GstCameraSourceType camera_type;
   GstModelType model_type;
   gdouble threshold;
@@ -158,19 +161,20 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options,
     g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->model_path != (gchar *)(&DEFAULT_QNN_FACE_DETECTION_MODEL) &&
-      options->model_path != NULL) {
+  if (options->model_path != NULL) {
     g_free ((gpointer)options->model_path);
   }
 
-  if (options->labels_path != (gchar *)(&DEFAULT_FACE_DETECTION_LABELS) &&
-      options->labels_path != NULL) {
+  if (options->labels_path != NULL) {
     g_free ((gpointer)options->labels_path);
   }
 
-  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
+  if (options->artifacts_dir != NULL) {
+    g_free ((gpointer) options->artifacts_dir);
+  }
+
+  if (config_file != NULL) {
     g_free ((gpointer) config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -738,6 +742,9 @@ parse_json (gchar * config_file, GstAppOptions * options)
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   GError *error = NULL;
+  const gchar *input_filename = NULL;
+  const gchar *model_filename = NULL;
+  const gchar *label_filename = NULL;
 
   parser = json_parser_new ();
 
@@ -766,8 +773,19 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "file-path")) {
-    options->file_path =
-        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+    input_filename =
+        json_object_get_string_member (root_obj, "file-path");
+    if (g_path_is_absolute (input_filename)) {
+      options->file_path = g_strdup (input_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->file_path =
+          g_build_filename (options->artifacts_dir, "media", input_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "rtsp-ip-port")) {
@@ -791,13 +809,35 @@ parse_json (gchar * config_file, GstAppOptions * options)
   }
 
   if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
+    model_filename =
+        json_object_get_string_member (root_obj, "model");
+    if (g_path_is_absolute (model_filename)) {
+      options->model_path = g_strdup (model_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->model_path =
+          g_build_filename (options->artifacts_dir, "models", model_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "labels")) {
-    options->labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "labels"));
+    label_filename =
+        json_object_get_string_member (root_obj, "labels");
+    if (g_path_is_absolute (label_filename)) {
+      options->labels_path = g_strdup (label_filename);
+    } else {
+      if (options->artifacts_dir == NULL) {
+        g_printerr ("Invalid artifacts directory\n");
+        g_object_unref (parser);
+        return -1;
+      }
+      options->labels_path =
+          g_build_filename (options->artifacts_dir, "labels", label_filename, NULL);
+    }
   }
 
   if (json_object_has_member (root_obj, "threshold")) {
@@ -839,12 +879,17 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = { };
   gchar *config_file = NULL;
+  const gchar *home_dir = NULL;
+  const gchar *model_filename = NULL;
+
+  home_dir = g_getenv ("HOME");
 
   // Set default value
-  options.model_path = DEFAULT_QNN_FACE_DETECTION_MODEL;
+  options.artifacts_dir = NULL;
+  options.model_path = NULL;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.labels_path = DEFAULT_FACE_DETECTION_LABELS;
+  options.labels_path = NULL;
   options.threshold = DEFAULT_THRESHOLD_VALUE;
   options.use_file = FALSE, options.use_rtsp = FALSE, options.use_camera =
       FALSE;
@@ -930,8 +975,20 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+  if (home_dir == NULL) {
+    g_printerr ("HOME env variable is not set!\n");
+    gst_app_context_free (&appctx, &options, config_file);
+    return EXIT_FAILURE;
+  }
+
   if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
+    config_file = resolve_config_file (DEFAULT_CONFIG_FILE);
+  }
+
+  if (config_file == NULL) {
+    g_printerr ("Unable to resolve configuration file path\n");
+    gst_app_context_free (&appctx, &options, NULL);
+    return -EINVAL;
   }
 
   if (!file_exists (config_file)) {
@@ -939,6 +996,9 @@ main (gint argc, gchar * argv[])
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
+
+  options.artifacts_dir =
+      g_build_filename (home_dir, "Downloads", "qimsdk_samples", NULL);
 
   if (parse_json (config_file, &options) != 0) {
     gst_app_context_free (&appctx, &options, config_file);
@@ -1040,10 +1100,19 @@ main (gint argc, gchar * argv[])
   // Set model path for execution
   if (options.model_path == NULL) {
     if (options.model_type == GST_MODEL_TYPE_QNN) {
-      options.model_path = DEFAULT_QNN_FACE_DETECTION_MODEL;
+      model_filename = DEFAULT_QNN_FACE_DETECTION_MODEL;
     } else {
-      options.model_path = DEFAULT_TFLITE_FACE_DETECTION_MODEL;
+      model_filename = DEFAULT_TFLITE_FACE_DETECTION_MODEL;
     }
+
+    options.model_path =
+        g_build_filename (options.artifacts_dir, "models", model_filename, NULL);
+  }
+
+  if (options.labels_path == NULL) {
+    options.labels_path =
+        g_build_filename (options.artifacts_dir, "labels",
+            DEFAULT_FACE_DETECTION_LABELS, NULL);
   }
 
   if (!file_exists (options.model_path)) {

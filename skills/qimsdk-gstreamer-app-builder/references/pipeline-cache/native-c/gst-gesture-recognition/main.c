@@ -1,5 +1,7 @@
-// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
  * Application: AI Vision + Gesture Recognition GStreamer Pipeline
@@ -103,10 +105,13 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <gst/webrtc/webrtc.h>
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
+#include "gst_sample_apps_utils.h"
 
 #define DEFAULT_WIDTH 1920
 #define DEFAULT_HEIGHT 1080
@@ -158,7 +163,7 @@ typedef struct GstAppConfig
  * is easier to reuse in production applications where multiple pipelines or
  * instances may exist in one process.
  */
-typedef struct GstAppContext
+typedef struct GstGestureAppContext
 {
   GstAppConfig config;
 
@@ -182,12 +187,12 @@ typedef struct GstAppContext
    * directly.
    */
   gboolean is_shutting_down;
-} GstAppContext;
+} GstGestureAppContext;
 
 /* Forward declaration used by WebRTC callbacks that are defined before the
  * generic application lifecycle helpers.
  */
-static void gst_app_request_shutdown (GstAppContext * appctx,
+static void gst_app_request_shutdown (GstGestureAppContext * appctx,
     const gchar * reason, gboolean try_eos);
 
 /**
@@ -201,7 +206,7 @@ static void gst_app_request_shutdown (GstAppContext * appctx,
  */
 static void
 on_webrtc_ice_candidate (GstElement * webrtcbin, guint mlineindex,
-  gchar * candidate, GstAppContext * appctx)
+  gchar * candidate, GstGestureAppContext * appctx)
 {
   if (!appctx || appctx->is_shutting_down || !candidate || !appctx->ws_conn)
     return;
@@ -240,7 +245,7 @@ on_webrtc_ice_candidate (GstElement * webrtcbin, guint mlineindex,
 static void
 on_offer_created (GstPromise * promise, gpointer user_data)
 {
-  GstAppContext *appctx = (GstAppContext *) user_data;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) user_data;
   if (!appctx || appctx->is_shutting_down)
     return;
 
@@ -308,7 +313,7 @@ on_offer_created (GstPromise * promise, gpointer user_data)
  */
 static void
 on_data_channel (GstElement * webrtcbin, GstWebRTCDataChannel * channel,
-    GstAppContext * appctx)
+    GstGestureAppContext * appctx)
 {
   if (!appctx || !webrtcbin || !channel)
     return;
@@ -330,7 +335,7 @@ on_data_channel (GstElement * webrtcbin, GstWebRTCDataChannel * channel,
  *
  */
 static void
-on_data_channel_open (GstWebRTCDataChannel * channel, GstAppContext * appctx)
+on_data_channel_open (GstWebRTCDataChannel * channel, GstGestureAppContext * appctx)
 {
   if (!appctx || !channel)
     return;
@@ -353,7 +358,7 @@ on_data_channel_open (GstWebRTCDataChannel * channel, GstAppContext * appctx)
  *
  */
 static void
-on_data_channel_close (GstWebRTCDataChannel * channel, GstAppContext * appctx)
+on_data_channel_close (GstWebRTCDataChannel * channel, GstGestureAppContext * appctx)
 {
   if (!appctx || !channel)
     return;
@@ -373,7 +378,7 @@ on_data_channel_close (GstWebRTCDataChannel * channel, GstAppContext * appctx)
  *
  */
 static void
-webrtc_setup_data_channel (GstAppContext * appctx)
+webrtc_setup_data_channel (GstGestureAppContext * appctx)
 {
   if (!appctx)
     return;
@@ -406,7 +411,7 @@ webrtc_setup_data_channel (GstAppContext * appctx)
  *
  */
 static void
-send_offer (GstElement * webrtcbin, GstAppContext * appctx)
+send_offer (GstElement * webrtcbin, GstGestureAppContext * appctx)
 {
   GstPromise * promise = gst_promise_new_with_change_func (
       on_offer_created, appctx, NULL);
@@ -421,7 +426,7 @@ send_offer (GstElement * webrtcbin, GstAppContext * appctx)
  *
  */
 static void
-on_negotiation_needed (GstElement * webrtcbin, GstAppContext * appctx)
+on_negotiation_needed (GstElement * webrtcbin, GstGestureAppContext * appctx)
 {
   if (!appctx || !appctx->ws_conn)
     return;
@@ -444,7 +449,7 @@ on_ws_message (SoupWebsocketConnection * conn, SoupWebsocketDataType type,
 {
   (void) conn;
 
-  GstAppContext *appctx = (GstAppContext *) user_data;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) user_data;
   if (!appctx || appctx->is_shutting_down)
     return;
 
@@ -559,7 +564,7 @@ on_ws_message (SoupWebsocketConnection * conn, SoupWebsocketDataType type,
 static void
 on_ws_closed (SoupWebsocketConnection * conn, gpointer user_data)
 {
-  GstAppContext *appctx = (GstAppContext *) user_data;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) user_data;
   if (!appctx)
     return;
 
@@ -600,7 +605,7 @@ on_server_connected (SoupSession * session, GAsyncResult * res,
   gpointer userdata)
 {
   GError * error = NULL;
-  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) userdata;
   if (!appctx)
     return;
 
@@ -651,7 +656,7 @@ on_server_connected (SoupSession * session, GAsyncResult * res,
  *
  */
 static gboolean
-webrtc_connect_signalling (GstAppContext * appctx)
+webrtc_connect_signalling (GstGestureAppContext * appctx)
 {
   if (!appctx)
     return FALSE;
@@ -697,7 +702,7 @@ webrtc_connect_signalling (GstAppContext * appctx)
  *
  */
 static gboolean
-webrtc_disconnect_signalling (GstAppContext * appctx)
+webrtc_disconnect_signalling (GstGestureAppContext * appctx)
 {
   if (!appctx)
     return FALSE;
@@ -1097,7 +1102,7 @@ gst_app_create_h264_encoder (void)
  * handoff point for documentation examples.
  */
 static gboolean
-gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
+gst_app_create_input_pipe (GstGestureAppContext * appctx, GstElement ** input_tail)
 {
   GstElement *source = NULL;
   GstElement *demux = NULL;
@@ -1106,9 +1111,12 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
   GstElement *decoder = NULL;
   GstElement *queue = NULL;
   GstElement *capsfilter = NULL;
+  GstElement *videorate = NULL;
+  GstElement *videorate_caps = NULL;
   GstElement *qtivtransform = NULL;
   GstCaps *caps = NULL;
   gboolean ret = FALSE;
+  gboolean is_v66 = is_v66_arch ();
 
   /*
    * Create the input boundary queue first because every supported input branch
@@ -1119,6 +1127,27 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
 
   if (!queue)
     goto error;
+
+  if (is_v66) {
+    videorate = gst_app_make_element ("videorate", "input_videorate");
+    videorate_caps = gst_app_make_element ("capsfilter", "input_videorate_caps");
+
+    if (!videorate || !videorate_caps) {
+      if (videorate) gst_object_unref (videorate);
+      if (videorate_caps) gst_object_unref (videorate_caps);
+      goto error;
+    }
+
+    caps = gst_caps_new_simple ("video/x-raw",
+        "framerate", GST_TYPE_FRACTION, 15, 1,
+        NULL);
+    g_object_set (G_OBJECT (videorate_caps), "caps", caps, NULL);
+    gst_caps_unref (caps);
+    caps = NULL;
+
+    gst_bin_add_many (GST_BIN (appctx->pipeline), videorate,
+        videorate_caps, NULL);
+  }
 
   /*
    * The queue is added once and then reused as the final element for all input
@@ -1164,14 +1193,15 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
     if (!qtivtransform)
       goto error;
 
-    gst_bin_add_many (GST_BIN (appctx->pipeline), source, capsfilter, qtivtransform, NULL);
+    gst_bin_add_many (GST_BIN (appctx->pipeline), source, capsfilter,
+        qtivtransform, NULL);
 
-    /*
-     * Link the complete USB branch into input_queue. From this point onward,
-     * the user pipeline sees the same input_tail abstraction as every other
-     * input type.
-     */
-    ret = gst_element_link_many (source, capsfilter, qtivtransform, queue, NULL);
+    if (is_v66)
+      ret = gst_element_link_many (source, capsfilter, qtivtransform,
+          videorate, videorate_caps, queue, NULL);
+    else
+      ret = gst_element_link_many (source, capsfilter, qtivtransform,
+          queue, NULL);
     if (!ret) {
       g_printerr ("ERROR: Failed to link USB camera source.\n");
       goto error;
@@ -1228,7 +1258,11 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
      * Link the ISP camera directly into input_queue. Hardware camera sources
      * are live sources, so downstream state changes may report NO_PREROLL.
      */
-    ret = gst_element_link_many (source, capsfilter, queue, NULL);
+    if (is_v66)
+      ret = gst_element_link_many (source, capsfilter, videorate,
+          videorate_caps, queue, NULL);
+    else
+      ret = gst_element_link_many (source, capsfilter, queue, NULL);
     if (!ret) {
       g_printerr ("ERROR: Failed to link ISP camera source.\n");
       goto error;
@@ -1277,7 +1311,11 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
      * Link the static part after qtdemux. The dynamic demuxer pad will be
      * connected to h264parse by gst_app_qtdemux_pad_added_cb().
      */
-    ret = gst_element_link_many (parse, decoder, capsfilter, queue, NULL);
+    if (is_v66)
+      ret = gst_element_link_many (parse, decoder, capsfilter, videorate,
+          videorate_caps, queue, NULL);
+    else
+      ret = gst_element_link_many (parse, decoder, capsfilter, queue, NULL);
     if (!ret) {
       g_printerr ("ERROR: Failed to link H.264 parser/decoder branch.\n");
       goto error;
@@ -1327,7 +1365,12 @@ gst_app_create_input_pipe (GstAppContext * appctx, GstElement ** input_tail)
      * Link the static RTSP decode path. rtspsrc itself is connected later from
      * the pad-added callback once the H.264 RTP pad appears.
      */
-    ret = gst_element_link_many (depay, parse, decoder, capsfilter, queue, NULL);
+    if (is_v66)
+      ret = gst_element_link_many (depay, parse, decoder, capsfilter,
+          videorate, videorate_caps, queue, NULL);
+    else
+      ret = gst_element_link_many (depay, parse, decoder, capsfilter,
+          queue, NULL);
     if (!ret) {
       g_printerr ("ERROR: Failed to link RTSP H.264 depay/parser/decoder branch.\n");
       goto error;
@@ -1364,7 +1407,7 @@ error:
 static GstFlowReturn
 gst_app_webrtc_meta_new_sample_cb (GstElement * appsink, gpointer userdata)
 {
-  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) userdata;
   GstSample *sample = NULL;
   GstBuffer *buffer = NULL;
   GstMapInfo mapinfo = GST_MAP_INFO_INIT;
@@ -1464,7 +1507,7 @@ gst_app_link_meta_queue_to_rtspbin (GstElement *meta_queue, GstElement *rtspbin)
  * backpressure.
  */
 static gboolean
-gst_app_create_output_pipe (GstAppContext * appctx, GstElement ** output_head,
+gst_app_create_output_pipe (GstGestureAppContext * appctx, GstElement ** output_head,
     GstElement ** meta_head)
 {
   GstElement *tee = NULL;
@@ -1759,7 +1802,7 @@ error:
  * sample suitable for step-by-step debugging.
  */
 static gboolean
-gst_app_create_user_pipe (GstAppContext * appctx,
+gst_app_create_user_pipe (GstGestureAppContext * appctx,
     GstElement * input_tail,
     GstElement * output_head,
     GstElement * meta_head)
@@ -2003,7 +2046,7 @@ gst_app_create_user_pipe (GstAppContext * appctx,
  * common output second, and the demo-specific middle section last.
  */
 static gboolean
-gst_app_create_pipe (GstAppContext * appctx)
+gst_app_create_pipe (GstGestureAppContext * appctx)
 {
   GstElement *input_tail = NULL;
   GstElement *output_head = NULL;
@@ -2064,7 +2107,7 @@ gst_app_create_pipe (GstAppContext * appctx)
  * cleanly.
  */
 static void
-gst_app_destroy_pipe (GstAppContext * appctx)
+gst_app_destroy_pipe (GstGestureAppContext * appctx)
 {
   if (appctx->webrtc_meta_channel != NULL) {
     g_object_unref (appctx->webrtc_meta_channel);
@@ -2103,7 +2146,7 @@ gst_app_destroy_pipe (GstAppContext * appctx)
  * that case the pipeline is moved directly to NULL and the main loop exits.
  */
 static void
-gst_app_request_shutdown (GstAppContext * appctx, const gchar * reason,
+gst_app_request_shutdown (GstGestureAppContext * appctx, const gchar * reason,
     gboolean try_eos)
 {
   GstState state = GST_STATE_NULL;
@@ -2195,7 +2238,7 @@ gst_app_request_shutdown (GstAppContext * appctx, const gchar * reason,
 static gboolean
 gst_app_handle_interrupt_signal (gpointer userdata)
 {
-  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) userdata;
 
   g_print ("\nReceived interrupt signal.\n");
   gst_app_request_shutdown (appctx, "Ctrl+C", TRUE);
@@ -2255,7 +2298,7 @@ gst_app_warning_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 static void
 gst_app_error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
-  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) userdata;
   GError *error = NULL;
   gchar *debug = NULL;
 
@@ -2274,7 +2317,7 @@ gst_app_error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 static void
 gst_app_eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
-  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstGestureAppContext *appctx = (GstGestureAppContext *) userdata;
 
   (void) bus;
 
@@ -2291,7 +2334,7 @@ gst_app_eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
  * asynchronous failures from elements can be missed completely.
  */
 static gboolean
-gst_app_watch_bus (GstAppContext * appctx)
+gst_app_watch_bus (GstGestureAppContext * appctx)
 {
   GstBus *bus = NULL;
 
@@ -2331,7 +2374,7 @@ main (int argc, char * argv[])
 {
   GOptionContext *option_ctx = NULL;
   GError *error = NULL;
-  GstAppContext appctx = { 0 };
+  GstGestureAppContext appctx = { 0 };
   guint interrupt_watch_id = 0;
   gboolean success = FALSE;
   gint result = 0;

@@ -54,7 +54,7 @@ Use this route when the user asks for single-stream detection/classification/seg
 
 - Use this file with `source-sink-patterns.md`, `pipeline-utilities.md`, `plugin-catalog.md`, and `artifact-contract.md` when generating an artifact.
 - Do not add daisy-chain, multistream, or zero-copy complexity.
-- Pose estimation (HRNet and other documented top-down pose models) is eligible for Route A: these models can run either directly on full frames (one stage, simpler) or on a detector-cropped ROI (an extra stage, sharper keypoints on small/distant subjects) — see `model-catalog.md`'s HRNetPose row. Match the topology to what the request actually describes; do not default to the two-stage cascade in `## 2b) Daisy-Chain Pose Estimation` just because the model is HRNet. Use `## 2b`'s daisy-chain form only when the request explicitly asks for detector→ROI pose (or names both a person-foot detector and a pose model).
+- Pose estimation (HRNet and other documented top-down pose models) is eligible for Route A: these models can run either directly on full frames (one stage, simpler) or on a detector-cropped ROI (an extra stage, sharper keypoints on small/distant subjects) — see `model-catalog.md`'s HRNetPose row. Match the topology to what the request actually describes; do not default to the two-stage cascade in `## 2b) Daisy-Chain Pose Estimation` just because the model is HRNet. Use `## 2b`'s daisy-chain form only when the request explicitly asks for detector→ROI pose (or names both a person-foot detector and a pose model), or when the subject is expected to be small or distant in frame — full-frame mode assumes the subject fills most of the frame, and on a smaller subject the resulting low-confidence keypoints get silently dropped by the confidence threshold with no error reported. If the request leaves framing/subject-size unclear, ask rather than assuming full-frame.
 
 ### Route A3: Audio Classification Pipeline (YAMNet / Audio + Video)
 
@@ -427,6 +427,8 @@ Super resolution pipelines use **Topology B** — `qtivcomposer` for side-by-sid
 - Composer is declared inline in the passthrough branch with pad position/dimensions properties
 - See `ai-pipeline-patterns.md` section 10 for the complete display template
 - **For file output (MP4):** After `qtivcomposer`, use `! video/x-raw,format=NV12 !` directly before `v4l2h264enc`. See section 10b for the complete file-output template.
+- `module=srnet` renders pixels rather than scored metadata, so confidence settings do not apply — do not add a `confidence` setting to the SR postprocess.
+- For an `.onnx` model, replace only the inference element (`qtimltflite`) with `qtimlonnx` and use its requested CPU or QNN provider configuration from `plugin-catalog.md`; when the user requests neither provider nor optimization level, apply the `execution-provider=cpu optimization-level=disable-all` generation default. Preserve the surrounding SR composition topology.
 
 ---
 
@@ -475,9 +477,6 @@ placeholder here because `<MODULE>` itself is unresolved — once you know the r
 module, `tensors=`/`layers=` becomes optional and usually should be omitted; see
 `plugin-catalog.md`'s "Tensor Filter — Decision Rule" before including it in a
 concrete pipeline.
-
-**ONNX caveat:** Include the following note in the artifact README unless the target was already verified:
-> ⚠️ Verify `gst-inspect-1.0 qtimlonnx` on the target before running this artifact. The source tree contains `qtimlonnx`, but target package/plugin availability can vary.
 
 ---
 
@@ -2287,6 +2286,8 @@ qtimlpostprocess module=qfd labels=<LABELS_PATH> ! text/x-raw ! queue ! face_mux
 - **`external` delegate (HTP backend) for all three stages** — these are w8a8-only models on device, no float/gpu variant.
 - Camera source variant (matches the official face-registration pipeline) uses `qticamsrc video_0::type=video` for the live preview pad and a `qtivtransform ! video/x-raw,format=NV12` on the inference source pad — see `plugin-catalog.md` "Overlay writability" note if composing with `qtivcomposer` elsewhere in the same pipeline.
 - **`bbox-stabilization=true` on Stage 1 postprocess is optional here, not required.** The general rule (this file, Template 1 notes) says to add it for `qfd` on live camera/RTSP sources — Template 17's canonical source is camera/RTSP — but this topology keeps stabilization opt-in. Add it only if the user asks for jitter reduction; do not add it by default just because the general camera-source rule would otherwise apply.
+- **Verify Stage 3's model output against `qfr`'s contract before deploying, not after a caps failure.** A model sharing Stage 3's reference name or filename pattern can ship a build with a different output contract (a different tensor count/shape) than `qfr`/`qfr-softmax`'s documented multi-tensor embedding set — a different output type that no `labels`/`settings` combination can reconcile (see `model-catalog.md`'s Face Detection / Recognition verification note). Confirm the deployed model's real tensor count/shape first; if it does not match, decode the output with a custom postprocess module instead of `qfr`.
+- **A stage's `settings=` file can hide further device-file requirements.** The settings JSON passed to `lite-3dmm` (or any stage) may itself hard-code additional on-device file paths that never appear in the pipeline command line. Read the settings file's actual content, not just the command that references its path, to find true device-file prerequisites.
 
 **Named element declarations** (all `qtimlvconverter`, `qtimltflite`, `qtimlpostprocess` at the TOP, no `!` connectors):
 

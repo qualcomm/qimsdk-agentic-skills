@@ -180,8 +180,8 @@ qtivcomposer -> display/file
 Rules:
 
 - Do not use `qtimetamux` or `qtivoverlay`.
-- Use `qtimlpostprocess module="srnet"`.
-- Use TFLite external delegate options for HTP unless the user provides exact options.
+- Use `qtimlpostprocess module="srnet"`; confidence settings do not apply because SR renders pixels rather than scored metadata.
+- Use TFLite external delegate options for HTP unless the user provides exact options. When the user supplies an `.onnx` model, replace only the inference stage with `qtimlonnx` and use its requested CPU or QNN provider configuration from `plugin-catalog.md` (when the user requests neither provider nor optimization level, apply the `execution-provider=cpu` + `optimization-level=disable-all` generation default); preserve the surrounding SR composer topology.
 - The render `VideoFilter` after `srnet` postprocess MUST be `.format("RGBA")` (device-verified; `RGB` fails to link) — same rule as every other `qtimlpostprocess` rendered-video branch. Do not pin `.resolution()` on it when a downstream composer sizes the tile.
 - For side-by-side comparison, use `qtivcomposer` geometry: passthrough left and SR output right. Ask if layout dimensions are not specified.
 - For MP4 output, place `VideoFilter().format("NV12")` directly after `qtivcomposer` before `v4l2h264enc`; do not insert `qtivtransform` after the composer.
@@ -239,6 +239,8 @@ Rules:
 
 - Use exactly three `qtimetamux` stages: one per recognition stage.
 - Never run `qfr` directly after face detection. It must consume the landmark-aligned Stage 2 output.
+- Before wiring Stage 3 to `qfr`/`qfr-softmax`, confirm the actual deployed model's output tensor count/shape matches that module's documented multi-tensor embedding contract (see `model-catalog.md`'s Face Detection / Recognition verification note) — a model sharing the same reference name or filename pattern can ship a build with a different output contract (a different tensor count/shape), which `qfr`/`qfr-softmax` cannot decode regardless of `labels`/`settings`. If the real output does not match, the model needs custom output decoding instead of `qfr`.
+- A stage's `settings=<path>` property can point to a JSON file that itself references further on-device file paths (e.g. companion binary data files) not visible anywhere in the application's own source. Read the referenced settings file's actual content to discover true device-file prerequisites; do not infer them solely from the app code that passes the settings path.
 - Do not reuse one labels/settings pair across stages. If the user supplies ambiguous files, ask which file belongs to which stage.
 - Stage 2 settings must point to the facemap 3DMM settings file and the runtime must have `blendShape.bin`, `meanFace.bin`, and `shapeBasis.bin` available under `/etc/data/` unless the user/reference provides another documented data location.
 - Stage 3 settings must point to the registered face database entries; recognition can run without matches but will not identify anyone without valid database entries.

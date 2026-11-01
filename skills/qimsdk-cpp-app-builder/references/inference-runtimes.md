@@ -29,17 +29,17 @@ tensors. `qtimlpostprocess` reads tensor metadata, not the identity of the upstr
 |---------|---------|-------------|----------------|-------------|
 | TFLite / LiteRT | `qtimltflite` | `.tflite` | GPU, HTP (via external delegate) | Available |
 | SNPE | `qtimlsnpe` | `.dlc` | DSP (Hexagon), GPU, CPU, AIP | Available |
-| QNN | `qtimlqnn` | `.so` or `.bin` | HTP/NPU, GPU, CPU | Available |
+| QNN | `qtimlqnn` | `.so`, `.bin`, or `.dlc` | HTP/NPU, GPU, CPU | Available |
 | QAIRT | `qtimlqairt` | `.dlc` or cached context `.bin` | HTP, GPU, CPU | Verify target plugin availability |
-| ONNX Runtime | `qtimlonnx` | `.onnx` | CPU, QNN (HTP/NPU) | **Not in current build** |
+| ONNX Runtime | `qtimlonnx` | `.onnx` | CPU, QNN (HTP/NPU) | Available |
 
 ## When to Use Each Runtime
 
 - **qtimltflite** — user has a `.tflite` model and wants TFLite execution; or wants HTP via QNN TFLite external delegate
 - **qtimlsnpe** — user has a `.dlc` model (converted via Qualcomm SNPE SDK); DSP delegate gives best latency for many models
-- **qtimlqnn** — user has a QNN-compiled `.so` model or cached `.bin`; gives direct access to HTP/NPU without TFLite layer
+- **qtimlqnn** — user has a QNN-compiled `.so` model, cached `.bin`, or supported `.dlc` model container; gives direct access to HTP/NPU without TFLite layer
 - **qtimlqairt** — user explicitly requests QAIRT or provides a QAIRT/SNPE `.dlc` container or cached context `.bin`; verify target plugin availability
-- **qtimlonnx** — user has a `.onnx` model; pipeline structure is correct but runtime is not yet in the current SDK build
+- **qtimlonnx** — user has a `.onnx` model and wants ONNX Runtime execution on CPU or QNN/HTP
 
 ---
 
@@ -196,7 +196,7 @@ gst-launch: `qtimlsnpe model=<model.dlc> delegate=none`
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `model` | string | — | Path to `.so` QNN model shared library or `.bin` cached binary |
+| `model` | string | — | Path to `.so` QNN model shared library, `.bin` cached binary, or `.dlc` model container |
 | `backend` | string | `/usr/lib/libQnnCpu.so` | Path to QNN backend shared library |
 | `system` | string | `/usr/lib/libQnnSystem.so` | Path to QNN system shared library |
 | `backend-device-id` | uint | `0` | Backend device index (for multi-CDSP devices) |
@@ -263,8 +263,6 @@ C++-specific QAIRT wrapper or property name.
 
 ## qtimlonnx — Full Property Reference
 
-> **Build status:** `qtimlonnx` is not available in the current SDK build. The pipeline syntax is correct and should work when the plugin is released, but it cannot be tested on device. Always include a note in the generated artifact README when using this runtime.
-
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `model` | string | — | Path to `.onnx` model file |
@@ -273,6 +271,8 @@ C++-specific QAIRT wrapper or property name.
 | `htp-performance-mode` | enum | `default` | HTP performance mode. Only applies when `execution-provider=qnn` |
 | `optimization-level` | enum | `extended` | ONNX Runtime graph optimization level |
 | `threads` | uint | — | Number of threads. Only applies for CPU provider |
+
+> `execution-provider=qnn` requires both the QNN backend library (`backend-path`) and ONNX Runtime's own QNN provider plugin (`libonnxruntime_providers_qnn.so`) on the target device — verify target plugin availability before generating an ONNX QNN pipeline.
 
 **`execution-provider` enum nicks:**
 
@@ -348,7 +348,7 @@ qtimlqnn model=<model.so> backend=/usr/lib/libQnnHtp.so system=/usr/lib/libQnnSy
 qtimlpostprocess module=yolov8 labels=<labels.json>
 ```
 
-ONNX QNN (not in current build):
+ONNX QNN:
 ```
 qtimlvconverter ! \
 qtimlonnx model=<model.onnx> execution-provider=qnn backend-path=/usr/lib/libQnnHtp.so ! \
@@ -361,7 +361,7 @@ qtimlpostprocess module=yolov8 labels=<labels.json>
 
 If the user does not specify a runtime, ask before generating:
 
-> "Which inference runtime should the pipeline use? Options: TFLite (`.tflite`), SNPE (`.dlc`), QNN (`.so`/`.bin`), or ONNX (`.onnx`, note: not in current build)."
+> "Which inference runtime should the pipeline use? Options: TFLite (`.tflite`), SNPE (`.dlc`), QNN (`.so`/`.bin`/`.dlc`), or ONNX (`.onnx`)."
 
 Backend/delegate selection changes the element, properties, and model format — generating without
 knowing the runtime produces structurally wrong code.
@@ -370,7 +370,6 @@ knowing the runtime produces structurally wrong code.
 
 ## Known Constraints
 
-- `qtimlonnx` is not in the current SDK build. Always add a README note when generating ONNX pipelines.
 - `qtimlsnpe` `layers` and `tensors` are mutually exclusive optional filters. **Property names are exact and fail silently with wrong names:** use `tensors` (NOT `output-tensors`, NOT `tensor-names`, NOT `output-layers`); delegate nicks are lowercase (`dsp`, `gpu`, `none`, `aip`). See "Tensor Filter Decision Rule" below before adding either filter.
 - `qtimlqnn` `backend` and `system` default to CPU. For NPU inference, `backend=/usr/lib/libQnnHtp.so` must be set explicitly. Always set both. **Property names are exact:** use `tensors` (NOT `output-tensors`, NOT `tensor-names`); `backend` (NOT `backend-path`); `system` (NOT `system-lib`, NOT `backend-extra`). `tensors` is optional; see the decision rule below before adding it.
 - All four inference elements occupy the same pipeline position and have identical caps — they are true drop-in replacements.
@@ -397,6 +396,12 @@ Known corpus values below can be used only when the requested model family and r
 | YOLOX, YOLOv8 detection | QNN (HTP or GPU) | `tensors="<boxes,scores,class_idx>"` |
 | InceptionV3 classification | SNPE GPU | `tensors="<class_logits>"` |
 
+For native C++ applications, the angle-bracket form above is gst-launch notation only.
+`tensors` is a `GstValueArray` property and must be constructed with the native
+GStreamer API (`g_value_init`/`gst_value_array_append_value`/`g_object_set_property`;
+see `plugin-catalog.md`); do not pass the gst-launch string as a C++ property value.
+The Python qimsdk list form is specific to that wrapper and does not apply here.
+
 For undocumented modules, default to omitting the filter but state in README assumptions that the model output order/filtering is unverified.
 
 ---
@@ -420,7 +425,7 @@ Use these as defaults when the user mentions a deployment goal:
 | Situation | Use |
 |-----------|-----|
 | User has an existing `.dlc` model file | SNPE (`qtimlsnpe`) |
-| User has a `.so` or `.bin` QNN model | QNN (`qtimlqnn`) |
+| User has a `.so`, `.bin`, or `.dlc` QNN model | QNN (`qtimlqnn`) |
 | New development, no existing model | QNN is the forward path |
 | User explicitly asks for SNPE SDK | SNPE |
 

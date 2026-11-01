@@ -6,3 +6,4 @@
   "ApplicationIcon": "",
   "ApplicationTextDescription": "This is an application to demonstrate transform video stream such as rotate, flip and scale on input live camera stream or file source of H264 codec. Output goes to display and also dumps to mp4 file"
 }
+
